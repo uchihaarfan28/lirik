@@ -1,0 +1,17 @@
+{
+  "name": "lirik-island-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Membaca lagu Spotify yang sedang diputar, mengambil lirik tersinkron, dan mengirim per baris ke Live Activity iPhone (Dynamic Island + CarPlay).",
+  "engines": {
+    "node": ">=20.6"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --env-file=.env src/server.js",
+    "login": "node --env-file=.env src/login-cli.js",
+    "simulate": "node src/simulate.js",
+    "test": "node --test \"test/*.test.js\""
+  }
+}

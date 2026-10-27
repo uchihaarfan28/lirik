@@ -1,0 +1,23 @@
+.git
+.claude
+.cursor
+agent-transcripts
+**/node_modules
+**/data
+**/.env
+**/*.p8
+
+# Bukan bagian image runtime
+ios
+docs
+contract
+server/test
+server/Dockerfile
+server/.dockerignore
+server/.env.example
+server/.gitignore
+server/CLAUDE.md
+CLAUDE.md
+README.md
+docker-compose.yml
+.gitignore

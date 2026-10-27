@@ -1,0 +1,19 @@
+{
+  "$comment": "Sumber kebenaran payload Live Activity. Ubah file ini bersama server/src/engine.js dan ios/Shared/LyricsActivityAttributes.swift. Dicek oleh server/test/contract.test.js.",
+  "attributesType": "LyricsActivityAttributes",
+  "attributes": {
+    "appName": "string"
+  },
+  "contentState": {
+    "title": "string",
+    "artist": "string",
+    "line": "string",
+    "nextLine": "string",
+    "isPlaying": "boolean",
+    "hasLyrics": "boolean"
+  },
+  "limits": {
+    "maxTextLength": 140,
+    "maxPayloadBytes": 4096
+  }
+}

@@ -1,0 +1,63 @@
+# Generate project Xcode:  brew install xcodegen && cd ios && xcodegen generate
+# Lalu buka LirikIsland.xcodeproj, pilih Team di Signing & Capabilities kedua target.
+name: LirikIsland
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""          # isi Team ID Apple Developer Anda (10 karakter)
+    CODE_SIGN_STYLE: Automatic
+    TARGETED_DEVICE_FAMILY: "1"   # iPhone
+
+targets:
+  LirikIsland:
+    type: application
+    platform: iOS
+    sources:
+      - LirikIsland
+      - Shared
+    settings:
+      base:
+        # GANTI dengan bundle ID Anda sendiri — harus sama dengan APNS_BUNDLE_ID di server
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.lirikisland
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+    info:
+      path: LirikIsland/Info.plist
+      properties:
+        CFBundleDisplayName: Lirik Island
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        NSSupportsLiveActivities: true
+        NSSupportsLiveActivitiesFrequentUpdates: true
+        UIBackgroundModes: [remote-notification]
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    entitlements:
+      path: LirikIsland/LirikIsland.entitlements
+      properties:
+        aps-environment: development
+    dependencies:
+      - target: LirikIslandWidget
+
+  LirikIslandWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - LirikIslandWidget
+      - Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.lirikisland.widget
+    info:
+      path: LirikIslandWidget/Info.plist
+      properties:
+        CFBundleDisplayName: Lirik Island
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension

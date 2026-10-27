@@ -1,0 +1,15 @@
+.DS_Store
+.claude/settings.local.json
+
+# Server
+server/node_modules/
+server/data/
+server/.env
+server/.gittoken
+*.p8
+
+# iOS (project dibuat dari project.yml)
+ios/*.xcodeproj
+ios/build/
+xcuserdata/
+DerivedData/

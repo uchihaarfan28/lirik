@@ -1,0 +1,26 @@
+# Coolify: pilih "Docker Compose", atau pakai Dockerfile saja di root.
+# Persistent volume /data wajib — token Spotify & push hilang tanpa ini.
+services:
+  lirik-island:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8888:8888"
+    environment:
+      PORT: "8888"
+      DATA_DIR: /data
+      # Sisanya isi di Coolify Environment Variables (jangan commit rahasia):
+      # PUBLIC_URL, API_KEY, SPOTIFY_*, APNS_* (pakai APNS_KEY_BASE64)
+    volumes:
+      - lirik-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8888/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  lirik-data:
