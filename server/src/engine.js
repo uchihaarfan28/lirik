@@ -9,6 +9,52 @@ const clip = (s) => {
 
 const STALE_AFTER_SEC = 15 * 60; // kalau server mati, Live Activity ditandai "basi" setelah 15 menit
 const ACTIVITY_MAX_MS = 8 * 3600_000; // iOS mengakhiri Live Activity setelah 8 jam
+const PAUSE_GRACE_SEC = 20; // hideAfterPauseSec=0 → ambang efektif 20 dtk (anti-kedip ganti lagu)
+
+export const PREFS_HIDE_AFTER = new Set([0, 60, 300, 900, -1]);
+export const PREFS_PAUSE_MODE = new Set(['dim', 'hide']);
+
+export function defaultPrefs(autoEndIdleMs = 15 * 60_000) {
+  const fromEnv = Math.round(Number(autoEndIdleMs) / 1000);
+  const hideAfterPauseSec = PREFS_HIDE_AFTER.has(fromEnv) ? fromEnv : 900;
+  return { hideAfterPauseSec, autoStart: true, pauseMode: 'hide' };
+}
+
+export function validatePrefsPatch(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw Object.assign(new Error('Body preferensi tidak valid'), { status: 400 });
+  }
+  const patch = {};
+  if ('hideAfterPauseSec' in body) {
+    const n = Number(body.hideAfterPauseSec);
+    if (!Number.isInteger(n) || !PREFS_HIDE_AFTER.has(n)) {
+      throw Object.assign(new Error('hideAfterPauseSec harus 0, 60, 300, 900, atau -1'), { status: 400 });
+    }
+    patch.hideAfterPauseSec = n;
+  }
+  if ('autoStart' in body) {
+    if (typeof body.autoStart !== 'boolean') {
+      throw Object.assign(new Error('autoStart harus boolean'), { status: 400 });
+    }
+    patch.autoStart = body.autoStart;
+  }
+  if ('pauseMode' in body) {
+    if (!PREFS_PAUSE_MODE.has(body.pauseMode)) {
+      throw Object.assign(new Error('pauseMode harus "dim" atau "hide"'), { status: 400 });
+    }
+    patch.pauseMode = body.pauseMode;
+  }
+  return patch;
+}
+
+/** Ambang efektif (ms) untuk auto-end idle. null = jangan pernah end. */
+export function effectiveHideAfterMs(prefs) {
+  if (!prefs || prefs.pauseMode === 'dim') return null;
+  const sec = prefs.hideAfterPauseSec;
+  if (sec === -1) return null;
+  if (sec === 0) return PAUSE_GRACE_SEC * 1000;
+  return sec * 1000;
+}
 
 /**
  * Inti sinkronisasi:
@@ -47,6 +93,7 @@ export class LyricsEngine {
     this.lastTs = 0;
     this.notPlayingSince = null;
     this.startRequestedAt = -Infinity;
+    this.lastArtworkKey = null;
 
     this.pollTimer = null;
     this.lineTimer = null;
@@ -57,10 +104,24 @@ export class LyricsEngine {
 
     this.lastPush = null;
     this.lastError = null;
+
+    if (!this.store.get('prefs')) {
+      this.store.set({ prefs: defaultPrefs(this.cfg.autoEndIdleMs) });
+    }
   }
 
   now() {
     return this.clock.now();
+  }
+
+  prefs() {
+    return { ...defaultPrefs(this.cfg.autoEndIdleMs), ...(this.store.get('prefs') || {}) };
+  }
+
+  setPreferences(patch) {
+    const next = { ...this.prefs(), ...validatePrefsPatch(patch) };
+    this.store.set({ prefs: next });
+    return next;
   }
 
   // ---------- siklus hidup ----------
@@ -117,6 +178,7 @@ export class LyricsEngine {
         if (remaining > 0) next = Math.min(next, remaining + 600);
       }
       await this.maintainActivity();
+      await this.maybeSendArtworkPush();
     } catch (e) {
       this.lastError = e.message;
       if (e.status === 429 && e.retryAfterSec) next = Math.max(next, e.retryAfterSec * 1000);
@@ -137,22 +199,41 @@ export class LyricsEngine {
     return Math.min(Math.max(0, raw), dur);
   }
 
+  /** Unix detik saat posisi lagu = 0 (stabil tanpa seek/pause/resume). */
+  playbackStartSec() {
+    if (!this.track) return 0;
+    return Math.max(0, Math.floor((this.anchor.at - this.anchor.progressMs) / 1000));
+  }
+
   applyPlayback(np, at, latencyMs) {
     const item = np?.item ?? null;
     if (!item) {
       // tidak ada lagu / iklan / podcast → anggap pause, posisi dibekukan
+      const wasPlaying = this.playing;
       const pos = this.positionAt(at);
       this.playing = false;
-      this.anchor = { progressMs: pos, at };
+      // Jangan geser anchor tiap poll — playbackStartSec harus stabil saat jeda
+      if (wasPlaying || this.notPlayingSince === null) {
+        this.anchor = { progressMs: pos, at };
+      }
       if (this.notPlayingSince === null) this.notPlayingSince = at;
       this.resync();
       return;
     }
     if (!this.track || this.track.id !== item.id) this.onTrackChange(item);
+    const wasPlaying = this.playing;
     this.playing = np.isPlaying;
-    this.anchor = { progressMs: np.progressMs + (np.isPlaying ? latencyMs : 0), at };
-    if (this.playing) this.notPlayingSince = null;
-    else if (this.notPlayingSince === null) this.notPlayingSince = at;
+    if (this.playing) {
+      this.anchor = { progressMs: np.progressMs + latencyMs, at };
+      this.notPlayingSince = null;
+    } else {
+      const progressMs = np.progressMs;
+      // Transisi ke jeda, atau seek saat jeda (>0.5 dtk) → perbarui anchor sekali
+      if (wasPlaying || this.notPlayingSince === null || Math.abs(progressMs - this.anchor.progressMs) > 500) {
+        this.anchor = { progressMs, at };
+      }
+      if (this.notPlayingSince === null) this.notPlayingSince = at;
+    }
     this.resync();
   }
 
@@ -199,11 +280,17 @@ export class LyricsEngine {
 
   buildState() {
     const t = this.track;
+    const timing = {
+      trackId: t?.id ? String(t.id) : '',
+      durationMs: t ? Math.round(Number(t.durationMs) || 0) : 0,
+      playbackStartSec: this.playbackStartSec(),
+    };
     const base = {
       title: clip(t?.title ?? ''),
       artist: clip(t?.artist ?? ''),
       isPlaying: Boolean(t) && this.playing,
       hasLyrics: this.lyricState.status === 'synced',
+      ...timing,
     };
     const msg = (line) => ({ ...base, line, nextLine: '' });
     if (!t) return msg('Putar lagu di Spotify');
@@ -291,9 +378,45 @@ export class LyricsEngine {
     return res;
   }
 
+  /** Silent push artwork (best-effort): hanya bila device token + activity + cover berubah. */
+  async maybeSendArtworkPush() {
+    const track = this.track;
+    const url = track?.artworkURL;
+    const trackId = track?.id ? String(track.id) : '';
+    if (!trackId || !url) return;
+
+    const key = `${trackId}|${url}`;
+    if (key === this.lastArtworkKey) return;
+
+    const deviceToken = this.store.get('deviceToken');
+    const activity = this.store.get('activity');
+    if (!deviceToken || !activity?.token) return;
+
+    this.lastArtworkKey = key;
+    const res = await this.apns.send(
+      deviceToken,
+      { 'content-available': 1 },
+      {
+        priority: 5,
+        label: 'artwork',
+        pushType: 'background',
+        extra: { artwork: { trackId, url } },
+      },
+    );
+    if (!res.ok) {
+      this.log.warn?.(`[engine] silent artwork gagal: ${res.status} ${res.reason ?? ''}`);
+      if (isDeadToken(res)) {
+        this.log.warn?.('[engine] device token tidak berlaku → dihapus');
+        this.store.set({ deviceToken: null });
+        this.lastArtworkKey = null;
+      }
+    }
+  }
+
   /** Auto-start (push-to-start) saat musik mulai, auto-end saat lama tidak ada musik. */
   async maintainActivity() {
     const now = this.now();
+    const prefs = this.prefs();
     let activity = this.store.get('activity');
 
     if (activity?.token && activity.registeredAtMs && now - activity.registeredAtMs > ACTIVITY_MAX_MS) {
@@ -301,7 +424,7 @@ export class LyricsEngine {
       activity = null;
     }
 
-    if (this.playing && this.track && !activity?.token) {
+    if (prefs.autoStart && this.playing && this.track && !activity?.token) {
       const pts = this.store.get('pushToStartToken');
       if (pts && now - this.startRequestedAt > this.cfg.startCooldownMs) {
         this.startRequestedAt = now;
@@ -323,12 +446,13 @@ export class LyricsEngine {
       }
     }
 
+    const hideAfterMs = effectiveHideAfterMs(prefs);
     if (
       activity?.token &&
-      this.cfg.autoEndIdleMs > 0 &&
+      hideAfterMs !== null &&
       !this.playing &&
       this.notPlayingSince !== null &&
-      now - this.notPlayingSince >= this.cfg.autoEndIdleMs
+      now - this.notPlayingSince >= hideAfterMs
     ) {
       await this.endActivity();
     }
@@ -349,6 +473,7 @@ export class LyricsEngine {
     this.store.set({ activity: { token, id: activityId ?? null, registeredAtMs: this.now() } });
     this.lastSentKey = null;
     this.lastPushAt = -Infinity;
+    this.lastArtworkKey = null;
     this.log.info?.('[engine] Live Activity terdaftar');
     this.resync();
     this.kick();
@@ -368,6 +493,12 @@ export class LyricsEngine {
     this.kick();
   }
 
+  registerDeviceToken(token) {
+    this.store.set({ deviceToken: token });
+    this.lastArtworkKey = null;
+    this.kick();
+  }
+
   async testPush() {
     if (!this.store.get('activity')?.token) {
       return { ok: false, status: 0, reason: 'Belum ada Live Activity yang terdaftar di server' };
@@ -381,6 +512,7 @@ export class LyricsEngine {
 
   status() {
     const s = this.buildState();
+    const prefs = this.prefs();
     return {
       spotifyConnected: this.spotify.isConnected(),
       pushToStartRegistered: Boolean(this.store.get('pushToStartToken')),
@@ -392,6 +524,9 @@ export class LyricsEngine {
             isPlaying: this.playing,
             positionMs: Math.round(this.positionAt(this.now())),
             durationMs: this.track.durationMs,
+            trackId: String(this.track.id ?? ''),
+            album: this.track.album ?? '',
+            artworkURL: this.track.artworkURL ?? '',
           }
         : null,
       lyrics: this.lyricState.status,
@@ -399,6 +534,11 @@ export class LyricsEngine {
       nextLine: s.nextLine,
       lastPush: this.lastPush,
       lastError: this.lastError,
+      preferences: {
+        hideAfterPauseSec: prefs.hideAfterPauseSec,
+        autoStart: prefs.autoStart,
+        pauseMode: prefs.pauseMode,
+      },
     };
   }
 }

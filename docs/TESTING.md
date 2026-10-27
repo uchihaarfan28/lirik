@@ -11,9 +11,9 @@ npm run simulate    # demo real-time ±32 dtk, push dicetak ke konsol
 | File | Cakupan |
 |---|---|
 | `test/lyrics.test.js` | Parser LRC (multi-timestamp, offset, tag per kata), `indexAt`, `cleanTitle`, `pickBest`, provider LRCLIB (get → search, cache, error) |
-| `test/engine.test.js` | Timing per baris, `LEAD_MS`, seek, pause, ganti lagu, status non-sinkron, push-to-start + cooldown, auto-end, token mati, rate limit, payload < 4 KB |
-| `test/apns-spotify.test.js` | JWT ES256 (format JOSE), dry run, `isDeadToken`, parsing Spotify, refresh token, 401/429, config |
-| `test/app.test.js` | Auth API key, registrasi token, validasi input, alur login sekali pakai, callback |
+| `test/engine.test.js` | Timing per baris, `LEAD_MS`, seek, pause, ganti lagu, dedupe playbackStartSec, prefs autoStart/dim/grace, silent artwork, auto-end, token mati, payload < 4 KB |
+| `test/apns-spotify.test.js` | JWT ES256, dry run liveactivity + background, artwork 300px, refresh token, config |
+| `test/app.test.js` | Auth API key, registrasi token/device-token, preferences validasi, alur login |
 | `test/contract.test.js` | `content-state` server = `contract/live-activity.json` = struct Swift; `/api/status` memenuhi field wajib `ServerStatus` |
 
 ### Aturan menulis tes
@@ -28,40 +28,37 @@ Catat hasil di [ROADMAP.md](ROADMAP.md) bagian Log.
 
 ### A. Setup
 - [ ] Server jalan; `GET /health` = `{"ok":true}`
-- [ ] App: URL + API key benar → tidak ada peringatan koneksi
-- [ ] API key salah → muncul "API key salah"
-- [ ] Hubungkan Spotify dari app → halaman "Spotify terhubung ✓" → status ✓ dalam 3 dtk
+- [ ] App buka tanpa input URL/API key → host muncul di Status; API key **tidak** terlihat
+- [ ] Hubungkan Spotify dari app → halaman "Spotify terhubung ✓" → status ✓
+- [ ] Status: App Group = OK; path container non-nil
 - [ ] "Auto-start siap" ✓ setelah app dibuka
 
 ### B. Live Activity dasar
 - [ ] "Tampilkan lirik" → Live Activity muncul di Dynamic Island
-- [ ] "Server pegang token update" ✓
 - [ ] "Kirim tes push" → "Tes dari server ✓" muncul ≤ 2 dtk
-- [ ] Tekan lama Island → tampilan expanded benar
-- [ ] Kunci layar → tampilan Lock Screen benar
-- [ ] "Hentikan" → Live Activity hilang, server tidak lagi pegang token
+- [ ] Lock Screen gaya klasik + progress jalan selaras lagu (±1–2 s)
+- [ ] Ganti gaya di Tampilan → baris berikutnya memakai gaya baru
+- [ ] "Hentikan" → Live Activity hilang
 
-### C. Sinkronisasi
-- [ ] 5 lagu populer berbeda: baris berganti tepat (catat selisih kira-kira)
-- [ ] Geser posisi lagu → lirik menyesuaikan ≤ 3 dtk
-- [ ] Pause → ikon jeda, baris berhenti; play → lanjut
-- [ ] Ganti lagu → "Memuat lirik…" lalu lirik lagu baru
+### C. Sinkronisasi & cover
+- [ ] 5 lagu berbeda: baris berganti tepat
+- [ ] Geser posisi → lirik + progress menyesuaikan ≤ 3 dtk
+- [ ] Pause → "Dijeda", opacity redup; play → lanjut
+- [ ] Buka app saat lagu A → cover di Island/Lock Screen; ganti lagu B → buka app lagi → cover B
 - [ ] Lagu tanpa lirik / instrumental → pesan sesuai tabel UI-DESIGN §4
-- [ ] Iklan (akun gratis) / podcast → dianggap jeda
 
-### D. Siklus hidup
+### D. Siklus hidup / jeda
+- [ ] "Segera sembunyikan" + pause ≥ 25 s → activity hilang
+- [ ] "Redupkan saja" + pause lama → activity tetap, tampilan redup
+- [ ] Matikan auto-start → stop → putar lagu baru → activity **tidak** muncul sendiri
 - [ ] Tutup paksa app → lirik tetap berjalan (push dari server)
-- [ ] Hentikan Live Activity, tutup app, putar lagu → auto-start dalam ≤ 10 dtk
-- [ ] Setelah auto-start, lirik ikut berganti (token update terkirim)
-- [ ] Stop musik 15 menit → Live Activity berakhir sendiri
 - [ ] Matikan server 15 menit → tampilan meredup (stale)
 
 ### E. CarPlay (iOS 26)
 - [ ] Tile muncul di Dashboard saat Live Activity aktif
-- [ ] Tata letak `.small` (bukan fallback compact)
+- [ ] Tata letak `.small` tanpa kontrol/progress animasi panjang
 - [ ] Teks terbaca sekilas dari posisi mengemudi
-- [ ] Selama 30 menit: hitung push terkirim (log server) vs baris yang tampil — apakah ada yang tertahan?
-- [ ] Settings › Lirik Island › Live Activities › More Frequent Updates: bandingkan nyala vs mati
+- [ ] Settings › More Frequent Updates: bandingkan nyala vs mati
 
 ## 3. Mengukur jatah push (T-103)
 

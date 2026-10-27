@@ -10,7 +10,10 @@
     "line": "string",
     "nextLine": "string",
     "isPlaying": "boolean",
-    "hasLyrics": "boolean"
+    "hasLyrics": "boolean",
+    "trackId": "string",
+    "durationMs": "number",
+    "playbackStartSec": "number"
   },
   "limits": {
     "maxTextLength": 140,

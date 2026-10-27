@@ -1,46 +1,48 @@
 import ActivityKit
 import Foundation
+import LyricsShared
+import UIKit
 
 /// Mengelola Live Activity di iPhone dan mengirim token push-nya ke server.
 @MainActor
 final class ActivityManager: ObservableObject {
     static let shared = ActivityManager()
 
-    @Published var serverURL: String {
-        didSet { UserDefaults.standard.set(serverURL, forKey: Keys.server) }
-    }
-    @Published var apiKey: String {
-        didSet { UserDefaults.standard.set(apiKey, forKey: Keys.apiKey) }
-    }
-
     @Published private(set) var status: ServerStatus?
     @Published private(set) var connectionError: String?
     @Published private(set) var message: String?
     @Published private(set) var activityActive = false
+    @Published var displayPrefs: DisplayPreferences
+    @Published var serverPrefs: ServerStatus.Preferences
+    @Published var appGroupOK: Bool = false
 
     private var observing = false
     private var observedIDs = Set<String>()
+    private var deviceTokenHex: String?
 
     private enum Keys {
-        static let server = "serverURL"
-        static let apiKey = "apiKey"
+        static let onboardingDone = "onboardingDone"
+    }
+
+    var onboardingDone: Bool {
+        get { UserDefaults.standard.bool(forKey: Keys.onboardingDone) }
+        set { UserDefaults.standard.set(newValue, forKey: Keys.onboardingDone) }
     }
 
     private init() {
-        serverURL = UserDefaults.standard.string(forKey: Keys.server) ?? ""
-        apiKey = UserDefaults.standard.string(forKey: Keys.apiKey) ?? ""
+        displayPrefs = DisplayPreferences.load()
+        serverPrefs = .init(hideAfterPauseSec: 900, autoStart: true, pauseMode: "hide")
         refreshActivityFlag()
+        appGroupOK = AppGroup.isAvailable
     }
 
     var activitiesEnabled: Bool { ActivityAuthorizationInfo().areActivitiesEnabled }
     var frequentUpdatesEnabled: Bool { ActivityAuthorizationInfo().frequentPushesEnabled }
 
-    private var client: ServerClient? {
-        let trimmed = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: trimmed), url.scheme?.hasPrefix("http") == true, !apiKey.isEmpty else {
-            return nil
-        }
-        return ServerClient(baseURL: url, apiKey: apiKey.trimmingCharacters(in: .whitespacesAndNewlines))
+    var serverHost: String { AppConfig.hostDisplay }
+
+    private var client: ServerClient {
+        ServerClient(baseURL: AppConfig.serverURL, apiKey: AppConfig.apiKey)
     }
 
     // MARK: - Observasi token
@@ -48,14 +50,13 @@ final class ActivityManager: ObservableObject {
     func startObserving() {
         guard !observing else { return }
         observing = true
+        appGroupOK = AppGroup.isAvailable
 
-        // Token "push-to-start": server bisa memulai Live Activity sendiri saat Spotify mulai diputar.
         Task {
             for await data in Activity<LyricsActivityAttributes>.pushToStartTokenUpdates {
                 await upload("api/push-to-start-token", ["token": data.hexString])
             }
         }
-        // Live Activity baru (termasuk yang dimulai server lewat push-to-start).
         Task {
             for await activity in Activity<LyricsActivityAttributes>.activityUpdates {
                 observe(activity)
@@ -72,7 +73,6 @@ final class ActivityManager: ObservableObject {
         observedIDs.insert(id)
         refreshActivityFlag()
 
-        // Token update khusus activity ini → server memakainya untuk kirim baris lirik.
         Task {
             for await data in activity.pushTokenUpdates {
                 await upload("api/activity-token", ["token": data.hexString, "activityId": id])
@@ -96,6 +96,89 @@ final class ActivityManager: ObservableObject {
         }
     }
 
+    // MARK: - Device token & artwork
+
+    func handleDeviceToken(_ data: Data) {
+        let hex = data.hexString
+        deviceTokenHex = hex
+        Task { await upload("api/device-token", ["token": hex]) }
+    }
+
+    func handleRemoteNotification(_ userInfo: [AnyHashable: Any]) async {
+        guard let artwork = userInfo["artwork"] as? [String: Any],
+              let trackId = artwork["trackId"] as? String,
+              let urlString = artwork["url"] as? String,
+              let url = URL(string: urlString),
+              !trackId.isEmpty
+        else { return }
+
+        if ArtworkStore.hasArtwork(for: trackId) {
+            await refreshLiveActivityUI()
+            return
+        }
+        await downloadArtwork(trackId: trackId, url: url)
+        await refreshLiveActivityUI()
+    }
+
+    func prefetchArtworkFromStatus() async {
+        guard let np = status?.nowPlaying,
+              let trackId = np.trackId, !trackId.isEmpty,
+              let urlString = np.artworkURL, !urlString.isEmpty,
+              let url = URL(string: urlString)
+        else { return }
+        if ArtworkStore.hasArtwork(for: trackId) { return }
+        await downloadArtwork(trackId: trackId, url: url)
+        await refreshLiveActivityUI()
+    }
+
+    private func downloadArtwork(trackId: String, url: URL) async {
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else { return }
+            var rgb: (Double, Double, Double)?
+            if let image = UIImage(data: data) {
+                rgb = approximateDominantRGB(image)
+            }
+            try ArtworkStore.save(data: data, for: trackId, dominantRGB: rgb)
+        } catch {
+            // best-effort
+        }
+    }
+
+    private func approximateDominantRGB(_ image: UIImage) -> (Double, Double, Double)? {
+        guard let cg = image.cgImage else { return nil }
+        let width = 8
+        let height = 8
+        guard let ctx = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let data = ctx.data else { return nil }
+        let ptr = data.bindMemory(to: UInt8.self, capacity: width * height * 4)
+        var r = 0.0, g = 0.0, b = 0.0
+        let n = Double(width * height)
+        for i in 0 ..< (width * height) {
+            let o = i * 4
+            r += Double(ptr[o]) / 255
+            g += Double(ptr[o + 1]) / 255
+            b += Double(ptr[o + 2]) / 255
+        }
+        return (r / n, g / n, b / n)
+    }
+
+    private func refreshLiveActivityUI() async {
+        for activity in Activity<LyricsActivityAttributes>.activities {
+            let state = activity.content.state
+            await activity.update(ActivityContent(state: state, staleDate: nil))
+        }
+    }
+
     // MARK: - Aksi dari UI
 
     func startActivity() async {
@@ -108,8 +191,22 @@ final class ActivityManager: ObservableObject {
         }
         var initial = LyricsActivityAttributes.ContentState.waiting
         if let s = status, let np = s.nowPlaying {
-            initial = .init(title: np.title, artist: np.artist, line: s.line, nextLine: s.nextLine,
-                            isPlaying: np.isPlaying, hasLyrics: s.lyrics == "synced")
+            initial = .init(
+                title: np.title,
+                artist: np.artist,
+                line: s.line,
+                nextLine: s.nextLine,
+                isPlaying: np.isPlaying,
+                hasLyrics: s.lyrics == "synced",
+                trackId: np.trackId ?? "",
+                durationMs: np.durationMs ?? 0,
+                playbackStartSec: 0
+            )
+            if let pos = np.positionMs, let dur = np.durationMs, dur > 0 {
+                let start = Int(Date().timeIntervalSince1970) - (pos / 1000)
+                initial.playbackStartSec = max(0, start)
+                initial.durationMs = dur
+            }
         }
         do {
             let activity = try Activity<LyricsActivityAttributes>.request(
@@ -133,20 +230,15 @@ final class ActivityManager: ObservableObject {
     }
 
     func spotifyLoginURL() async -> URL? {
-        guard let client else {
-            message = "Isi URL server dan API key dulu."
-            return nil
-        }
         do {
             return try await client.spotifyLoginLink()
         } catch {
-            message = "Tidak bisa membuat link login: \(error.localizedDescription)"
+            message = "Tidak bisa menghubungi server"
             return nil
         }
     }
 
     func testPush() async {
-        guard let client else { message = "Isi URL server dan API key dulu."; return }
         do {
             try await client.post("api/test-push")
             message = "Tes push terkirim — lihat Dynamic Island / Lock Screen."
@@ -157,29 +249,46 @@ final class ActivityManager: ObservableObject {
 
     func refreshStatus() async {
         refreshActivityFlag()
-        guard let client else {
-            status = nil
-            connectionError = "Belum diatur"
-            return
-        }
+        appGroupOK = AppGroup.isAvailable
         do {
             status = try await client.status()
             connectionError = nil
+            if let p = status?.preferences {
+                serverPrefs = p
+            }
+            await prefetchArtworkFromStatus()
         } catch {
             status = nil
-            connectionError = error.localizedDescription
+            connectionError = "Tidak bisa menghubungi server"
+        }
+    }
+
+    func saveDisplayPrefs() {
+        displayPrefs.save()
+    }
+
+    func syncServerPrefs() async {
+        let body: [String: Any] = [
+            "hideAfterPauseSec": serverPrefs.hideAfterPauseSec,
+            "autoStart": serverPrefs.autoStart,
+            "pauseMode": serverPrefs.pauseMode,
+        ]
+        do {
+            let updated = try await client.postPreferences(body)
+            serverPrefs = updated
+            message = "Preferensi jeda disimpan."
+        } catch {
+            message = error.localizedDescription
         }
     }
 
     private func upload(_ path: String, _ body: [String: String]) async {
-        guard let client else { return }
-        // Coba beberapa kali — app bisa saja baru dibangunkan di background dengan jaringan lambat.
         for attempt in 0 ..< 3 {
             do {
                 try await client.post(path, body)
                 return
             } catch {
-                if attempt == 2 { message = "Gagal kirim ke server (\(path)): \(error.localizedDescription)" }
+                if attempt == 2 { message = "Gagal kirim ke server (\(path))" }
                 try? await Task.sleep(for: .seconds(2))
             }
         }

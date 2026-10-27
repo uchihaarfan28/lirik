@@ -87,3 +87,39 @@ Format: konteks → keputusan → konsekuensi. Tambahkan ADR baru di bawah, jang
 **Keputusan (usulan).** Sumber alternatif di dalam app: ShazamKit mengenali lagu + offset lewat mic; engine versi Swift meng-update Live Activity lokal; tanpa server.
 
 **Syarat sebelum diterima.** Spike membuktikan mic aktif tidak menurunkan kualitas audio CarPlay/Bluetooth dan konsumsi baterai wajar (PRD NFR-9).
+
+## ADR-009 — AppConfig tertanam (tanpa input URL/API key di UI)
+
+**Status:** Diterima (T-108)
+
+**Konteks.** App prototipe meminta URL server + API key di Form. Untuk pemakaian pribadi satu server, itu berlebihan dan berisiko salah ketik. API key tidak boleh terlihat di Status.
+
+**Keputusan.** `ios/LirikIsland/AppConfig.swift` (gitignore) diisi dari `server/.envcoolify` (`PUBLIC_URL`, `API_KEY`). Template: `ios/AppConfig.template.swift.txt`. ActivityManager memakai `AppConfig` saja.
+
+**Konsekuensi.**
+- (+) Setup lebih pendek; key tidak muncul di UI.
+- (−) Build lokal butuh menyalin/generate AppConfig dulu; tanpa file itu compile gagal.
+
+## ADR-010 — Cover album lewat App Group + silent push best-effort
+
+**Status:** Diterima (T-109)
+
+**Konteks.** Widget Live Activity tidak boleh networking. URL di `content-state` membengkak payload (< 4 KB) dan widget tetap tidak mengunduh.
+
+**Keputusan.** `content-state` hanya `trackId`. URL artwork di `/api/status.nowPlaying` + body silent push. App mengunduh ke App Group `artwork/<trackId>.jpg`. Prefetch foreground = path utama; silent push (`content-available`) = best-effort. App Group ID: entitlement `group.com.savage.lirikisland`, derive runtime `group.` + bundle app.
+
+**Konsekuensi.**
+- (+) Payload kecil; cover tersedia di Island/Lock Screen bila file ada.
+- (−) Cover bisa kosong di background sampai app aktif lagi; butuh App Groups capability (xtool rewrite `XTL-…`).
+
+## ADR-011 — Progress bar memakai `playbackStartSec` + `durationMs`
+
+**Status:** Diterima (T-109)
+
+**Konteks.** `ProgressView(timerInterval:)` memakai `Date()` saat render. Mengirim `elapsedMs` mentah membuat progress loncat karena waktu push ≠ waktu render.
+
+**Keputusan.** Kirim `playbackStartSec` (unix detik saat posisi = 0) dan `durationMs`. Range timer = `start...(start+duration)`. Saat jeda: `ProgressView(value:)` statis. Anchor dibekukan saat pause agar dedupe tidak spam.
+
+**Konsekuensi.**
+- (+) Progress selaras sistem tanpa push tiap detik.
+- (−) Seek/pause/resume tetap memicu push (playbackStartSec berubah) — itu disengaja.

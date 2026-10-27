@@ -1,0 +1,9 @@
+version: 1
+bundleID: com.savage.lirikisland
+product: LirikIsland
+infoPath: Info.plist
+entitlementsPath: App.entitlements
+extensions:
+  - product: LirikIslandWidget
+    infoPath: Widget-Info.plist
+    entitlementsPath: Widget.entitlements

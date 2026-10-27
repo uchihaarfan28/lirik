@@ -16,15 +16,18 @@ Prinsip utama: **dilirik, bukan dibaca**. Pengguna sering sedang menyetir; satu 
 
 | Token | Nilai | Pemakaian |
 |---|---|---|
-| `accent` | `#1FD661` (RGB 0.12, 0.84, 0.38) | Ikon musik, keyline Island |
+| `accent` | `#22C55E` (RGB ≈ 0.133, 0.773, 0.369) | Ikon musik, keyline Island, CTA |
 | `primary` | putih 100% | Baris aktif |
 | `secondary` | putih 60% | Judul/artis, baris berikutnya |
 | Latar Live Activity | hitam 82% (`activityBackgroundTint`) | Lock Screen, CarPlay |
-| Status basi | opacity 55% seluruh konten | `context.isStale` |
+| Latar app | hitam OLED / system background | Tab Sekarang |
+| Status basi / jeda | opacity 55% | `context.isStale` atau `!isPlaying` |
 
 Ikon SF Symbols: `music.note` (memutar), `pause.fill` (jeda), `waveform` (indikator memutar di expanded).
 
 Tipografi (SF, Dynamic Type): baris aktif **bold**, maks. 2 baris, `minimumScaleFactor 0.7`; baris berikutnya 1 baris.
+
+Progress: `ProgressView(timerInterval:)` saat memutar; nilai statis saat jeda. CarPlay `.small` tanpa progress animasi.
 
 ## 3. Permukaan
 
@@ -49,15 +52,25 @@ Expanded:  ♪            Lagu Demo · Lirik Island            ∿
 
 ### 3.2 Lock Screen / StandBy (`ActivityFamily.medium`)
 
+Tiga gaya (preferensi App Group `lockScreenStyle`):
+
+| Gaya | Isi |
+|---|---|
+| **klasik** | Ikon 44×44 + judul/artis + lirik + next + progress |
+| **cover** | Thumb cover 52×52 dari App Group + lirik + progress |
+| **minimal** | Hanya baris lirik besar |
+
+Saat jeda: opacity 0.55 + caption lokal "Dijeda".
+
 ```
 ┌────────────────────────────────────────────────┐
 │ ┌────┐  Lagu Demo · Lirik Island               │
 │ │ ♪  │  Lampu kota berbaris di kaca depan      │  ← title3 bold, putih
 │ └────┘  Jalan tol sepi, radio pelan            │  ← subheadline, 60%
+│         ████████░░░░ progress                  │
 └────────────────────────────────────────────────┘
 ```
-- Kotak ikon 44×44, radius 10, isi accent 18%.
-- Padding 14 pt.
+- Padding 14 pt. Shared views tidak memakai `@Environment(\.activityFamily)`.
 
 ### 3.3 CarPlay Dashboard (`ActivityFamily.small`, iOS 26)
 
@@ -92,22 +105,23 @@ Baris aktif memakai `.id(text)` + `.transition(.push(from: .bottom))` — baris 
 | Server mati > 15 menit | (terakhir) | — | Opacity 55% |
 | Tes | Tes dari server ✓ | — | `nextLine` = jam UTC |
 
-## 5. App iPhone (satu layar `Form`)
+## 5. App iPhone (TabView)
 
-Urutan section:
+Tab: **Sekarang** | **Tampilan** | **Status**.
 
-1. **Server** — URL, API key (SecureField), peringatan koneksi (oranye).
-2. **Spotify** — status "Akun terhubung", tombol "Hubungkan akun Spotify".
-3. **Sedang diputar** — ikon play/pause, "Judul — Artis", baris aktif (title3 bold), baris berikutnya.
-4. **Live Activity** — status: aktif, server pegang token, auto-start siap, update sering diizinkan · tombol: Tampilkan lirik di Dynamic Island, Kirim tes push, Hentikan (merah) · footer: penjelasan CarPlay & More Frequent Updates.
-5. **Push terakhir** — `event · OK / gagal status alasan` (monospace).
-6. **Catatan server** — `lastError` (oranye).
-7. **Pesan** — hasil aksi terakhir.
+### Sekarang
+Hero cover (dari App Group) + judul/artis + lirik + CTA "Tampilkan lirik" / "Hentikan Live Activity".
 
-Status ditampilkan dengan ikon: ✓ hijau (ya), ✗ abu (tidak), − abu (belum diketahui). Status di-refresh tiap 3 dtk saat layar terbuka.
+### Tampilan
+Pratinjau Lock Screen (data contoh buatan) + preferensi visual (App Group) + bagian "Saat jeda" → `POST /api/preferences`.
 
-### Rencana Fase 1: onboarding (FR-42)
-Layar bertahap saat pertama dibuka: (1) Server → tes koneksi, (2) Login Spotify → tunggu "terhubung", (3) Izinkan Live Activities + More Frequent Updates, (4) Tombol "Coba sekarang" → tes push. Setelah selesai, masuk ke layar Form di atas.
+### Status
+Host server (bukan API key), Spotify, diagnosa Live Activity, App Group OK/path, tes push.
+
+Polling: `scenePhase` aktif → 3 s bila playing, 10 s bila idle; batal di background.
+
+### Onboarding (3 langkah, sekali)
+1. Hubungkan Spotify → 2. Izinkan Live Activities → 3. Coba push / selesai.
 
 ### Rencana Fase 3: lirik penuh di app (FR-15) & offset (FR-14)
 - Daftar semua baris, baris aktif disorot dan auto-scroll ke tengah.
@@ -117,16 +131,23 @@ Layar bertahap saat pertama dibuka: (1) Server → tes koneksi, (2) Login Spotif
 
 | Konteks | Teks |
 |---|---|
-| Tombol utama | Tampilkan lirik di Dynamic Island |
+| Tombol utama | Tampilkan lirik |
 | Login | Hubungkan akun Spotify |
 | Sukses login (web) | Spotify terhubung ✓ — Silakan kembali ke app Lirik Island lalu putar lagu di Spotify. |
 | Live Activities mati | Live Activities mati. Nyalakan di Settings › Lirik Island › Live Activities. |
-| Belum diatur | Isi URL server dan API key dulu. |
+| Gagal koneksi | Tidak bisa menghubungi server |
+| Jeda (widget) | Dijeda |
 | Alert push-to-start | Judul: nama lagu · Isi: nama artis |
+
+## 7. Mode jeda (UI Tampilan)
+
+- Toggle "Mulai otomatis saat Spotify diputar" → `autoStart`.
+- Toggle "Redupkan saja saat jeda" → `pauseMode=dim` (picker sembunyikan disabled).
+- Picker sembunyikan setelah: Segera / 1 / 5 / 15 mnt / Jangan.
 
 Gaya: kalimat pendek, kata "Anda" dihindari bila bisa, istilah teknis (Live Activity, Dynamic Island, CarPlay) tidak diterjemahkan.
 
-## 7. Aksesibilitas
+## 8. Aksesibilitas
 
 - Semua teks mengikuti Dynamic Type; baris aktif boleh mengecil sampai 70% sebelum terpotong.
 - Kontras putih di atas hitam 82% ≥ 7:1.

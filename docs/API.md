@@ -73,7 +73,10 @@ Dikirim app saat Live Activity `.ended` / `.dismissed`.
     "artist": "Artis A, Artis B",
     "isPlaying": true,
     "positionMs": 63210,
-    "durationMs": 214000
+    "durationMs": 214000,
+    "trackId": "spotifyTrackId",
+    "album": "Nama Album",
+    "artworkURL": "https://i.scdn.co/image/…"
   },
   "lyrics": "synced",
   "line": "Baris yang sedang dinyanyikan",
@@ -86,14 +89,45 @@ Dikirim app saat Live Activity `.ended` / `.dismissed`.
     "reason": null,
     "line": "Baris yang sedang dinyanyikan"
   },
-  "lastError": null
+  "lastError": null,
+  "preferences": {
+    "hideAfterPauseSec": 900,
+    "autoStart": true,
+    "pauseMode": "hide"
+  }
 }
 ```
-- `nowPlaying` = `null` bila belum ada lagu.
+- `nowPlaying` = `null` bila belum ada lagu. `artworkURL` hanya di status (bukan di content-state).
 - `lyrics` ∈ `idle | loading | synced | plain | instrumental | none | error`.
 - `lastPush` = `null` sebelum push pertama. `lastError` = string atau `null`.
+- `preferences` — lihat `POST /api/preferences`.
 
 Model Swift: `ServerStatus` di `ios/LirikIsland/ServerClient.swift`. Field non-opsional di Swift wajib selalu ada di respons (dicek tes kontrak).
+
+### `POST /api/device-token`
+Token remote notification app (untuk silent push artwork, best-effort).
+```json
+// request
+{ "token": "a1b2…(hex)" }
+// response
+{ "ok": true }
+```
+Token mati (410 / BadDeviceToken) hanya menghapus `deviceToken`, bukan token Live Activity.
+
+### `POST /api/preferences`
+Merge parsial preferensi siklus hidup (disimpan di `store.prefs`).
+```json
+// request (semua field opsional)
+{ "hideAfterPauseSec": 60, "autoStart": false, "pauseMode": "dim" }
+// response
+{ "preferences": { "hideAfterPauseSec": 60, "autoStart": false, "pauseMode": "dim" } }
+```
+| Field | Nilai sah | Perilaku |
+|---|---|---|
+| `hideAfterPauseSec` | `0`, `60`, `300`, `900`, `-1` | `0` → grace efektif **20 s**; `-1` → tidak pernah auto-end |
+| `autoStart` | boolean | `false` → tidak kirim event `start` (manual dari app tetap boleh) |
+| `pauseMode` | `dim` \| `hide` | `dim` → jangan `endActivity` karena idle; `hide` → end setelah ambang |
+Nilai lain → `400`. Default: dari `AUTO_END_IDLE_MIN` → `hideAfterPauseSec`, `autoStart=true`, `pauseMode=hide`.
 
 ### `POST /api/test-push`
 Mengirim update "Tes dari server ✓" ke Live Activity terdaftar.
@@ -126,8 +160,13 @@ Host: `api.sandbox.push.apple.com` (development) / `api.push.apple.com` (product
 | `nextLine` | string | Baris non-kosong berikutnya, `""` bila tidak ada |
 | `isPlaying` | bool | `false` saat jeda / tidak ada lagu |
 | `hasLyrics` | bool | `true` hanya bila lirik tersinkron |
+| `trackId` | string | ID lagu (kunci file cover di App Group); `""` bila tidak ada |
+| `durationMs` | number (Int) | Durasi lagu ms; `0` bila tidak ada |
+| `playbackStartSec` | number (Int) | Unix detik saat posisi = 0; untuk `ProgressView(timerInterval:)`; `0` bila tidak ada |
 
-Swift: `LyricsActivityAttributes.ContentState`. Decoder Swift toleran (key hilang → nilai default), tapi server **wajib** mengirim keenam key.
+**Tidak** ada `artworkURL` / `elapsedMs` di content-state (payload < 4 KB; progress memakai timer sistem).
+
+Swift: `LyricsActivityAttributes.ContentState`. Decoder Swift toleran (key hilang → nilai default), tapi server **wajib** mengirim semua key.
 
 ### `attributes` (statis, hanya di event `start`)
 
@@ -149,7 +188,10 @@ Swift: `LyricsActivityAttributes.ContentState`. Decoder Swift toleran (key hilan
       "line": "Baris yang sedang dinyanyikan",
       "nextLine": "Baris berikutnya",
       "isPlaying": true,
-      "hasLyrics": true
+      "hasLyrics": true,
+      "trackId": "abc123",
+      "durationMs": 214000,
+      "playbackStartSec": 1793075000
     },
     "stale-date": 1793076526
   }
@@ -164,7 +206,11 @@ Swift: `LyricsActivityAttributes.ContentState`. Decoder Swift toleran (key hilan
     "event": "start",
     "attributes-type": "LyricsActivityAttributes",
     "attributes": { "appName": "Lirik Island" },
-    "content-state": { "title": "Judul Lagu", "artist": "Artis", "line": "Memuat lirik…", "nextLine": "", "isPlaying": true, "hasLyrics": false },
+    "content-state": {
+      "title": "Judul Lagu", "artist": "Artis", "line": "Memuat lirik…", "nextLine": "",
+      "isPlaying": true, "hasLyrics": false,
+      "trackId": "abc123", "durationMs": 214000, "playbackStartSec": 1793075000
+    },
     "alert": { "title": "Judul Lagu", "body": "Artis" },
     "input-push-token": 1,
     "stale-date": 1793076600
@@ -178,16 +224,36 @@ Swift: `LyricsActivityAttributes.ContentState`. Decoder Swift toleran (key hilan
   "aps": {
     "timestamp": 1793079000,
     "event": "end",
-    "content-state": { "title": "Judul Lagu", "artist": "Artis", "line": "…", "nextLine": "", "isPlaying": false, "hasLyrics": true },
+    "content-state": {
+      "title": "Judul Lagu", "artist": "Artis", "line": "…", "nextLine": "",
+      "isPlaying": false, "hasLyrics": true,
+      "trackId": "abc123", "durationMs": 214000, "playbackStartSec": 1793075000
+    },
     "dismissal-date": 1793079000
   }
 }
 ```
 
+### Silent push artwork (best-effort)
+Bukan Live Activity. Hanya dikirim bila `deviceToken` + activity terdaftar + cover/`trackId` berubah.
+| Header | Nilai |
+|---|---|
+| `apns-push-type` | `background` |
+| `apns-topic` | `<APNS_BUNDLE_ID>` (tanpa `.push-type.liveactivity`) |
+| `apns-priority` | `5` |
+
+```json
+{
+  "aps": { "content-available": 1 },
+  "artwork": { "trackId": "abc123", "url": "https://i.scdn.co/image/…" }
+}
+```
+Tanpa alert/sound/badge. Path utama cover: app prefetch dari `/api/status` saat foreground.
+
 ### Aturan
 - `timestamp` wajib naik terus per activity (server menjamin ini).
 - Payload total < 4 KB.
-- Respons APNs `410` atau `400 BadDeviceToken` → token dihapus dari server.
+- Respons APNs `410` atau `400 BadDeviceToken` → token terkait dihapus (`activity` atau `deviceToken`).
 
 ---
 

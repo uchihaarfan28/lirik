@@ -126,14 +126,27 @@ sequenceDiagram
         E->>E: resync(): hitung baris aktif, pasang timer ke baris berikutnya
     end
     Note over E: timer berbunyi tepat (t_baris − LEAD_MS)
-    E->>AP: event=update, content-state={line, nextLine, …}
+    E->>AP: event=update, content-state={line, nextLine, trackId, playbackStartSec, …}
 ```
 
 ### 3.3 Auto-start (push-to-start)
 
-Bila musik diputar, tidak ada Live Activity terdaftar, dan server punya push-to-start token → kirim `event: start` (cooldown 60 dtk). iOS membuat Live Activity, membangunkan app di background, app mengirim token update baru ke `/api/activity-token`, lalu engine langsung mengirim baris aktif.
+Bila `preferences.autoStart`, musik diputar, tidak ada Live Activity terdaftar, dan server punya push-to-start token → kirim `event: start` (cooldown 60 dtk). iOS membuat Live Activity, membangunkan app di background, app mengirim token update baru ke `/api/activity-token`, lalu engine langsung mengirim baris aktif.
 
 Catatan: iOS tidak selalu mengirim token update setelah push-to-start bila app sudah lama mati (lihat PRD §10 #3).
+
+### 3.4 Artwork cover
+
+1. Spotify `album.images` → `artworkURL` di item track (server).
+2. App (foreground): `GET /api/status` → unduh gambar → App Group `artwork/<trackId>.jpg` → `activity.update` lokal.
+3. Best-effort: silent push background `{ artwork: { trackId, url } }` bila device token + activity ada.
+4. Widget membaca file by `trackId` (tanpa networking).
+
+### 3.5 Auto-end / mode jeda
+
+`store.prefs`: `hideAfterPauseSec`, `autoStart`, `pauseMode`.
+- `pauseMode=dim` → tidak pernah `endActivity` karena idle.
+- `pauseMode=hide` + ambang: `0` → grace **20 s** (anti-kedip ganti lagu); `60`/`300`/`900`; `-1` → tidak pernah.
 
 ## 4. Algoritma sinkronisasi (engine)
 
@@ -162,7 +175,7 @@ Setiap polling memanggil `resync()` ulang, sehingga seek/pause/drift terkoreksi 
 
 ### 4.3 State yang dikirim
 
-`buildState()` menghasilkan objek kontrak (`title, artist, line, nextLine, isPlaying, hasLyrics`). Aturan isi `line`:
+`buildState()` menghasilkan objek kontrak (`title, artist, line, nextLine, isPlaying, hasLyrics, trackId, durationMs, playbackStartSec`). `playbackStartSec` dihitung dari anchor (`floor((anchor.at − progressMs) / 1000)`); dibekukan saat jeda agar dedupe stabil. Aturan isi `line`:
 
 | Kondisi | `line` | `nextLine` |
 |---|---|---|

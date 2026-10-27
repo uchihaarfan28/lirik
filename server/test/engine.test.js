@@ -249,8 +249,14 @@ test('testPush dan status', async () => {
   assert.equal(st.spotifyConnected, true);
   assert.equal(st.activityRegistered, true);
   assert.equal(st.nowPlaying.title, 'Judul');
+  assert.equal(st.nowPlaying.trackId, 'trk1');
+  assert.equal(st.nowPlaying.durationMs, 60_000);
+  assert.equal(typeof st.nowPlaying.positionMs, 'number');
   assert.equal(st.lyrics, 'synced');
   assert.equal(st.line, 'satu');
+  assert.equal(st.preferences.hideAfterPauseSec, 900);
+  assert.equal(st.preferences.autoStart, true);
+  assert.equal(st.preferences.pauseMode, 'hide');
   // setelah tes, baris asli dikirim lagi
   await clock.advance(1100);
   assert.equal(apns.lines().at(-1), 'satu');
@@ -265,5 +271,136 @@ test('teks panjang dipotong supaya payload kecil', async () => {
   const line = apns.sent.at(-1).aps['content-state'].line;
   assert.equal(line.length, 140);
   assert.ok(Buffer.byteLength(JSON.stringify({ aps: apns.sent.at(-1).aps })) < 4096);
+  engine.stop();
+});
+
+test('dedupe: maju waktu tanpa ganti baris tidak spam push', async () => {
+  const { clock, apns, engine } = setup({
+    lyrics: { status: 'synced', lines: [{ t: 0, text: 'panjang' }, { t: 30_000, text: 'akhir' }] },
+  });
+  engine.start();
+  await clock.advance(2000);
+  const before = apns.sent.filter((s) => s.aps.event === 'update').length;
+  const startSec = apns.sent.at(-1).aps['content-state'].playbackStartSec;
+  await clock.advance(10_000);
+  const after = apns.sent.filter((s) => s.aps.event === 'update').length;
+  assert.equal(after, before, 'tidak ada push ekstra hanya karena waktu');
+  assert.equal(apns.sent.at(-1).aps['content-state'].playbackStartSec, startSec);
+  engine.stop();
+});
+
+test('seek mengubah playbackStartSec dan memicu push', async () => {
+  const { clock, apns, engine, spotify } = setup({
+    lyrics: { status: 'synced', lines: [{ t: 0, text: 'awal' }, { t: 20_000, text: 'jauh' }] },
+  });
+  engine.start();
+  await clock.advance(2000);
+  const before = apns.sent.at(-1).aps['content-state'].playbackStartSec;
+  spotify.offsetMs = 20_000;
+  await clock.advance(1100);
+  const after = apns.sent.at(-1).aps['content-state'];
+  assert.notEqual(after.playbackStartSec, before);
+  assert.equal(after.line, 'jauh');
+  engine.stop();
+});
+
+test('content-state punya trackId durationMs playbackStartSec', async () => {
+  const { clock, apns, engine } = setup();
+  engine.start();
+  await clock.advance(2500);
+  const s = apns.sent.at(-1).aps['content-state'];
+  assert.equal(s.trackId, 'trk1');
+  assert.equal(s.durationMs, 60_000);
+  assert.equal(typeof s.playbackStartSec, 'number');
+  assert.ok(s.playbackStartSec > 0);
+  engine.stop();
+});
+
+test('autoStart=false tidak mengirim event start', async () => {
+  const { clock, apns, engine, store } = setup({ activity: false });
+  store.set({ pushToStartToken: 'ef'.repeat(32) });
+  engine.setPreferences({ autoStart: false });
+  engine.start();
+  await clock.advance(100);
+  assert.equal(apns.sent.filter((s) => s.aps.event === 'start').length, 0);
+  engine.stop();
+});
+
+test('pauseMode=hide, hideAfterPauseSec=0: grace 20s lalu end', async () => {
+  const { clock, apns, engine, spotify, store } = setup();
+  engine.setPreferences({ pauseMode: 'hide', hideAfterPauseSec: 0 });
+  engine.start();
+  await clock.advance(2500);
+  spotify.pause();
+  await clock.advance(600);
+  assert.equal(apns.sent.find((s) => s.aps.event === 'end'), undefined);
+  await clock.advance(5000);
+  assert.equal(apns.sent.find((s) => s.aps.event === 'end'), undefined, 'belum end di 5s');
+  await clock.advance(16_000);
+  const end = apns.sent.find((s) => s.aps.event === 'end');
+  assert.ok(end, 'end setelah grace 20s');
+  assert.equal(store.get('activity'), null);
+  engine.stop();
+});
+
+test('pauseMode=dim tidak end meski jeda lama', async () => {
+  const { clock, apns, engine, spotify, store } = setup();
+  engine.setPreferences({ pauseMode: 'dim', hideAfterPauseSec: 60 });
+  engine.start();
+  await clock.advance(2500);
+  spotify.pause();
+  await clock.advance(70_000);
+  assert.equal(apns.sent.find((s) => s.aps.event === 'end'), undefined);
+  assert.ok(store.get('activity'));
+  engine.stop();
+});
+
+test('silent push artwork saat device+activity+cover baru', async () => {
+  const track = {
+    ...TRACK,
+    artworkURL: 'https://example.com/cover-a.jpg',
+  };
+  const { clock, apns, engine, store, spotify } = setup();
+  spotify.track = track;
+  store.set({ deviceToken: 'dd'.repeat(32) });
+  engine.start();
+  await clock.advance(100);
+  const bg = apns.sent.filter((s) => s.opts?.pushType === 'background');
+  assert.equal(bg.length, 1);
+  assert.equal(bg[0].token, 'dd'.repeat(32));
+  assert.deepEqual(bg[0].opts.extra.artwork, { trackId: 'trk1', url: 'https://example.com/cover-a.jpg' });
+  assert.equal(bg[0].opts.priority, 5);
+  const count = bg.length;
+  await clock.advance(5000);
+  assert.equal(
+    apns.sent.filter((s) => s.opts?.pushType === 'background').length,
+    count,
+    'tidak spam artwork yang sama',
+  );
+  engine.stop();
+});
+
+test('silent push artwork tidak dikirim tanpa activity', async () => {
+  const { clock, apns, engine, store, spotify } = setup({ activity: false });
+  spotify.track = { ...TRACK, artworkURL: 'https://example.com/c.jpg' };
+  store.set({ deviceToken: 'ee'.repeat(32) });
+  engine.start();
+  await clock.advance(100);
+  assert.equal(apns.sent.filter((s) => s.opts?.pushType === 'background').length, 0);
+  engine.stop();
+});
+
+test('device token mati hanya menghapus deviceToken', async () => {
+  const { clock, apns, engine, store, spotify } = setup();
+  spotify.track = { ...TRACK, artworkURL: 'https://example.com/c.jpg' };
+  store.set({ deviceToken: 'ff'.repeat(32) });
+  apns.result = (token) =>
+    token === 'ff'.repeat(32)
+      ? { ok: false, status: 410, reason: 'Unregistered' }
+      : { ok: true, status: 200 };
+  engine.start();
+  await clock.advance(100);
+  assert.equal(store.get('deviceToken'), null);
+  assert.ok(store.get('activity'), 'activity token tetap');
   engine.stop();
 });

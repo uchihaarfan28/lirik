@@ -31,7 +31,7 @@ export function createApns({
   log = console,
   now = () => Date.now(),
 }) {
-  const topic = `${bundleId}.push-type.liveactivity`;
+  const liveActivityTopic = `${bundleId}.push-type.liveactivity`;
   let jwt = null;
   let jwtAt = 0;
   let session = null;
@@ -62,10 +62,19 @@ export function createApns({
     return s;
   }
 
-  async function send(deviceToken, aps, { priority = 10, label = 'push' } = {}) {
-    const payload = JSON.stringify({ aps });
+  /**
+   * @param {string} deviceToken
+   * @param {object} aps — objek `aps` APNs
+   * @param {{ priority?: number, label?: string, pushType?: string, topic?: string, extra?: object }} [opts]
+   *   - Live Activity (default): pushType liveactivity, topic bundleId.push-type.liveactivity
+   *   - Background: pushType background, topic = bundleId, priority 5, extra di root payload
+   */
+  async function send(deviceToken, aps, { priority = 10, label = 'push', pushType = 'liveactivity', topic: topicOverride, extra = {} } = {}) {
+    const payload = JSON.stringify({ aps, ...extra });
+    const apnsTopic =
+      topicOverride ?? (pushType === 'background' ? bundleId : liveActivityTopic);
     if (dryRun) {
-      log.info?.(`[apns:dry-run] ${label} → ${short(deviceToken)} ${payload}`);
+      log.info?.(`[apns:dry-run] ${label} type=${pushType} topic=${apnsTopic} → ${short(deviceToken)} ${payload}`);
       return { ok: true, status: 200, dryRun: true };
     }
     return new Promise((resolve) => {
@@ -82,8 +91,8 @@ export function createApns({
           ':method': 'POST',
           ':path': `/3/device/${deviceToken}`,
           authorization: `bearer ${authToken()}`,
-          'apns-topic': topic,
-          'apns-push-type': 'liveactivity',
+          'apns-topic': apnsTopic,
+          'apns-push-type': pushType,
           'apns-priority': String(priority),
           'content-type': 'application/json',
         });
@@ -119,7 +128,8 @@ export function createApns({
   }
 
   return {
-    topic,
+    topic: liveActivityTopic,
+    bundleId,
     send,
     close() {
       session?.close();

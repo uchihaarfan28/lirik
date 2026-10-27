@@ -36,17 +36,29 @@ Status: ⬜ belum · 🔄 dikerjakan · ✅ selesai · ⛔ terblokir
 - Migrasi otomatis dari UserDefaults lalu hapus nilai lama.
 - **Selesai bila:** API key tidak ada lagi di UserDefaults; tetap terbaca setelah app di-restart.
 
-### T-105 · Onboarding (FR-42) ⬜
-- Alur 4 langkah sesuai [UI-DESIGN.md §5](UI-DESIGN.md).
-- Tombol "Tes koneksi" memanggil `/api/status`.
-- **Selesai bila:** pengguna baru bisa sampai tes push sukses tanpa membaca README.
+### T-105 · Onboarding (FR-42) ✅
+- Alur 3 langkah: Spotify → Live Activities → coba push (lihat UI-DESIGN §5).
+- **Selesai bila:** pengguna baru bisa sampai tes push tanpa isi URL/API key.
 
 ### T-106 · Ikon app & nama tampilan ⬜
 - Asset catalog dengan AppIcon (1024 px), set `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon` di `project.yml`.
+- Opsional; tidak memblokir T-108–T-110.
 
 ### T-107 · Endpoint & UI "Hentikan dari server" ⬜
 - Bila Live Activity ditutup manual saat app mati, server tidak tahu. Saat app dibuka, kirim daftar activity aktif ke server (`POST /api/activity-sync {activityIds: [...]}`); server hapus token yang tidak ada di daftar.
 - **Selesai bila:** skenario "geser tutup → putar lagu → auto-start jalan lagi" berhasil setelah app dibuka sekali; tes server ditambah.
+
+### T-108 · Rombak UI app (AppConfig + TabView) ✅
+- AppConfig tertanam; TabView Sekarang / Tampilan / Status; onboarding 3 langkah.
+- **Selesai bila:** tanpa input URL/key; host tampil di Status; API key tidak terlihat.
+
+### T-109 · Artwork + progress Live Activity ✅
+- Kontrak: `trackId`, `durationMs`, `playbackStartSec`; cover App Group; 3 gaya Lock Screen; silent push best-effort.
+- **Selesai bila:** `npm test` hijau; progress timerInterval; widget baca cover by trackId.
+
+### T-110 · Preferensi jeda / hemat baterai ✅
+- `POST /api/preferences` + grace 20 s; `pauseMode` dim|hide; polling `scenePhase`.
+- **Selesai bila:** tes engine autoStart/dim/grace lulus; UI Tampilan sync prefs.
 
 ## Fase 2 — Mode ShazamKit (tanpa Premium, semua pemutar)
 
@@ -97,6 +109,7 @@ Status: ⬜ belum · 🔄 dikerjakan · ✅ selesai · ⛔ terblokir
 
 Tambahkan entri terbaru di atas. Format: `YYYY-MM-DD · T-xxx · ringkasan · hasil/angka penting`.
 
+- 2026-10-27 · T-108–T-110 · Rombak UI/UX: kontrak trackId/playbackStartSec/durationMs, artwork App Group, silent push, preferences, TabView, ADR-009/010/011 · 63 tes server lulus
 - 2026-10-27 · Deploy · Dockerfile + `.dockerignore` + `docker-compose.yml` di root monorepo untuk Coolify · Base Directory `/`, volume `/data`
 - 2026-10-27 · Docs · PRD, DESIGN, API, UI-DESIGN, ADR, TESTING, CLAUDE.md, perintah Claude Code, tes kontrak server ↔ Swift, opsi `LOG_PUSHES` · 50 tes lulus
 - 2026-10-27 · T-001–T-004 · Prototipe selesai · 43 tes lulus, simulasi baris ±0,4 dtk lebih awal (LEAD_MS=400)

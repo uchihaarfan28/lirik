@@ -27,7 +27,15 @@ const spotify = {
       isPlaying: true,
       type: 'track',
       progressMs: progress,
-      item: { id: 'demo', title: 'Lagu Demo', artist: 'Lirik Island', primaryArtist: 'Lirik Island', album: '', durationMs: DURATION },
+      item: {
+        id: 'demo-track-1',
+        title: 'Lagu Demo',
+        artist: 'Lirik Island',
+        primaryArtist: 'Lirik Island',
+        album: 'Pulau Demo',
+        durationMs: DURATION,
+        artworkURL: 'https://example.com/demo-cover.jpg',
+      },
     };
   },
 };
@@ -36,7 +44,12 @@ const lyrics = { getLyrics: async () => ({ status: 'synced', lines: parseLrc(DEM
 
 const t0 = Date.now();
 const apns = {
-  async send(token, aps) {
+  async send(token, aps, opts = {}) {
+    if (opts.pushType === 'background') {
+      const sec = ((Date.now() - t0) / 1000).toFixed(1).padStart(5);
+      console.log(`[${sec}s] artwork │ ${opts.extra?.artwork?.trackId ?? '?'}`);
+      return { ok: true, status: 200 };
+    }
     const s = aps['content-state'];
     const sec = ((Date.now() - t0) / 1000).toFixed(1).padStart(5);
     console.log(`[${sec}s] ${aps.event.padEnd(6)} │ ${s.line}${s.nextLine ? `   (berikut: ${s.nextLine})` : ''}`);
@@ -45,7 +58,10 @@ const apns = {
 };
 
 const store = new Store(null);
-store.set({ activity: { token: 'a'.repeat(64), id: 'sim', registeredAtMs: Date.now() } });
+store.set({
+  activity: { token: 'a'.repeat(64), id: 'sim', registeredAtMs: Date.now() },
+  deviceToken: 'b'.repeat(64),
+});
 
 const engine = new LyricsEngine({
   spotify,

@@ -6,6 +6,11 @@ struct ServerStatus: Decodable {
         let title: String
         let artist: String
         let isPlaying: Bool
+        let positionMs: Int?
+        let durationMs: Int?
+        let trackId: String?
+        let album: String?
+        let artworkURL: String?
     }
 
     struct LastPush: Decodable {
@@ -13,6 +18,12 @@ struct ServerStatus: Decodable {
         let ok: Bool
         let status: Int
         let reason: String?
+    }
+
+    struct Preferences: Decodable, Equatable {
+        var hideAfterPauseSec: Int
+        var autoStart: Bool
+        var pauseMode: String
     }
 
     let spotifyConnected: Bool
@@ -24,6 +35,7 @@ struct ServerStatus: Decodable {
     let nextLine: String
     let lastPush: LastPush?
     let lastError: String?
+    let preferences: Preferences?
 }
 
 struct ServerClient {
@@ -32,11 +44,14 @@ struct ServerClient {
 
     enum ClientError: LocalizedError {
         case http(Int, String)
+        case notConfigured
 
         var errorDescription: String? {
             switch self {
             case let .http(code, message):
                 return code == 401 ? "API key salah" : "Server \(code): \(message)"
+            case .notConfigured:
+                return "Tidak bisa menghubungi server"
             }
         }
     }
@@ -55,15 +70,41 @@ struct ServerClient {
         let _: Empty = try await request("POST", path, body: body)
     }
 
+    func postJSON<B: Encodable>(_ path: String, _ body: B) async throws {
+        let _: Empty = try await request("POST", path, encodable: body)
+    }
+
+    func postPreferences(_ body: [String: Any]) async throws -> ServerStatus.Preferences {
+        struct PrefsResponse: Decodable { let preferences: ServerStatus.Preferences }
+        var req = URLRequest(url: baseURL.appending(path: "api/preferences"))
+        req.httpMethod = "POST"
+        req.timeoutInterval = 10
+        req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: req)
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200 ..< 300).contains(code) else {
+            let message = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
+                ?? String(decoding: data.prefix(200), as: UTF8.self)
+            throw ClientError.http(code, message)
+        }
+        return try JSONDecoder().decode(PrefsResponse.self, from: data).preferences
+    }
+
     private struct Empty: Decodable {}
 
     private func request<T: Decodable>(_ method: String, _ path: String, body: [String: String]? = nil) async throws -> T {
+        try await request(method, path, encodable: body)
+    }
+
+    private func request<T: Decodable, B: Encodable>(_ method: String, _ path: String, encodable: B?) async throws -> T {
         var req = URLRequest(url: baseURL.appending(path: path))
         req.httpMethod = method
         req.timeoutInterval = 10
         req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        if let body {
-            req.httpBody = try JSONEncoder().encode(body)
+        if let encodable {
+            req.httpBody = try JSONEncoder().encode(encodable)
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         let (data, response) = try await URLSession.shared.data(for: req)

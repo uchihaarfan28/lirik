@@ -11,6 +11,19 @@ export class SpotifyError extends Error {
   }
 }
 
+/** Pilih URL cover: width terdekat 300, fallback gambar terbesar. */
+export function pickArtworkURL(images) {
+  if (!Array.isArray(images) || images.length === 0) return '';
+  const ranked = images
+    .filter((im) => im && typeof im.url === 'string' && im.url)
+    .map((im) => ({ url: im.url, w: Number(im.width) || 0 }));
+  if (!ranked.length) return '';
+  const withWidth = ranked.filter((im) => im.w > 0);
+  if (!withWidth.length) return ranked[0].url;
+  withWidth.sort((a, b) => Math.abs(a.w - 300) - Math.abs(b.w - 300) || b.w - a.w);
+  return withWidth[0].url;
+}
+
 /** Ubah respons /me/player/currently-playing jadi bentuk yang dipakai engine. */
 export function parseCurrentlyPlaying(json) {
   if (!json) return null;
@@ -30,6 +43,7 @@ export function parseCurrentlyPlaying(json) {
     primaryArtist: artists[0] ?? '',
     album: it.album?.name ?? '',
     durationMs: Number(it.duration_ms ?? 0),
+    artworkURL: pickArtworkURL(it.album?.images),
   };
   return base;
 }

@@ -4,12 +4,28 @@ import { createApp } from '../src/app.js';
 
 const KEY = 'k'.repeat(24);
 const calls = [];
+let prefs = { hideAfterPauseSec: 900, autoStart: true, pauseMode: 'hide' };
 const engine = {
   kick: () => calls.push(['kick']),
   registerPushToStart: (t) => calls.push(['pts', t]),
   registerActivity: (a) => calls.push(['act', a]),
   activityEnded: (a) => calls.push(['ended', a]),
-  status: () => ({ spotifyConnected: true, line: 'halo' }),
+  registerDeviceToken: (t) => calls.push(['device', t]),
+  setPreferences: (patch) => {
+    calls.push(['prefs', patch]);
+    if (patch.hideAfterPauseSec !== undefined && ![0, 60, 300, 900, -1].includes(patch.hideAfterPauseSec)) {
+      throw Object.assign(new Error('hideAfterPauseSec harus 0, 60, 300, 900, atau -1'), { status: 400 });
+    }
+    if (patch.pauseMode !== undefined && !['dim', 'hide'].includes(patch.pauseMode)) {
+      throw Object.assign(new Error('pauseMode harus "dim" atau "hide"'), { status: 400 });
+    }
+    if (patch.autoStart !== undefined && typeof patch.autoStart !== 'boolean') {
+      throw Object.assign(new Error('autoStart harus boolean'), { status: 400 });
+    }
+    prefs = { ...prefs, ...patch };
+    return prefs;
+  },
+  status: () => ({ spotifyConnected: true, line: 'halo', preferences: prefs }),
   testPush: async () => ({ ok: false, status: 0, reason: 'Belum ada Live Activity' }),
 };
 const spotify = {
@@ -105,6 +121,30 @@ test('test-push meneruskan alasan gagal', async () => {
   const r = await api('/api/test-push', { method: 'POST' });
   assert.equal(r.status, 502);
   assert.match((await r.json()).error, /Belum ada Live Activity/);
+});
+
+test('device-token registrasi', async () => {
+  const hex = 'b2'.repeat(40);
+  assert.equal((await api('/api/device-token', { method: 'POST', body: { token: hex } })).status, 200);
+  assert.deepEqual(calls.at(-1), ['device', hex]);
+  assert.equal((await api('/api/device-token', { method: 'POST', body: { token: 'bad!' } })).status, 400);
+});
+
+test('preferences merge & validasi', async () => {
+  const ok = await api('/api/preferences', {
+    method: 'POST',
+    body: { hideAfterPauseSec: 60, pauseMode: 'dim', autoStart: false },
+  });
+  assert.equal(ok.status, 200);
+  assert.deepEqual((await ok.json()).preferences, {
+    hideAfterPauseSec: 60,
+    autoStart: false,
+    pauseMode: 'dim',
+  });
+  assert.equal((await api('/api/preferences', { method: 'POST', body: { hideAfterPauseSec: 12 } })).status, 400);
+  assert.equal((await api('/api/preferences', { method: 'POST', body: { pauseMode: 'blink' } })).status, 400);
+  const st = await (await api('/api/status')).json();
+  assert.equal(st.preferences.pauseMode, 'dim');
 });
 
 test('rute tidak dikenal → 404', async () => {

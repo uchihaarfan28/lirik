@@ -1,0 +1,12 @@
+import Foundation
+
+/// Salin file ini ke `LirikIsland/AppConfig.swift` lalu isi nilai dari `server/.envcoolify`.
+/// File `AppConfig.swift` di-gitignore — jangan commit API key.
+enum AppConfig {
+    static let serverURL = URL(string: "https://lirik.example.com")!
+    static let apiKey = "ganti-dengan-api-key"
+
+    static var hostDisplay: String {
+        serverURL.host ?? serverURL.absoluteString
+    }
+}

@@ -137,6 +137,18 @@ export function createApp({ cfg, spotify, engine, log = console, now = () => Dat
 
     'GET /api/status': (req, res) => send(res, 200, engine.status()),
 
+    'POST /api/device-token': async (req, res) => {
+      const token = requireToken(await readJson(req));
+      engine.registerDeviceToken(token);
+      send(res, 200, { ok: true });
+    },
+
+    'POST /api/preferences': async (req, res) => {
+      const body = await readJson(req);
+      const preferences = engine.setPreferences(body);
+      send(res, 200, { preferences });
+    },
+
     'POST /api/test-push': async (req, res) => {
       const r = await engine.testPush();
       send(res, r?.ok ? 200 : 502, r?.ok ? { ok: true } : { error: `Push gagal: ${r?.status ?? 0} ${r?.reason ?? ''}`.trim() });
