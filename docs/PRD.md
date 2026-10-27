@@ -72,7 +72,7 @@ Kode `FR-x` dirujuk di ROADMAP dan tes.
 | FR-12 | Bedakan status: tersinkron, tanpa sinkron, instrumental, tidak ada, gagal | ✅ |
 | FR-13 | Cache lirik per lagu | ✅ (memori) |
 | FR-14 | Koreksi offset manual per lagu (+/- 0,5 dtk) dari app | ⬜ Fase 3 |
-| FR-15 | Tampilan lirik lengkap di dalam app (scroll otomatis) | ⬜ Fase 3 |
+| FR-15 | Tampilan lirik lengkap di dalam app (scroll otomatis) | ✅ (layar penuh; offset FR-14 masih Fase 3) |
 
 ### Tampilan
 | ID | Kebutuhan | Status |
@@ -95,7 +95,7 @@ Kode `FR-x` dirujuk di ROADMAP dan tes.
 | ID | Kebutuhan | Status |
 |---|---|---|
 | FR-40 | App menampilkan status: Spotify terhubung, token terdaftar, push terakhir, error server | ✅ |
-| FR-41 | API key disimpan di Keychain | ⬜ Fase 1 |
+| FR-41 | API key disimpan di Keychain | ✅ |
 | FR-42 | Onboarding langkah demi langkah di app | ⬜ Fase 1 |
 
 ## 7. Kebutuhan non-fungsional

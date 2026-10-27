@@ -39,6 +39,9 @@ targets:
         UIBackgroundModes: [remote-notification]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        CFBundleURLTypes:
+          - CFBundleURLName: com.savage.lirikisland
+            CFBundleURLSchemes: [lirikisland]
     entitlements:
       path: App.entitlements
       properties:

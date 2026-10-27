@@ -2,9 +2,16 @@ import Foundation
 
 /// Salin file ini ke `LirikIsland/AppConfig.swift` lalu isi nilai dari `server/.envcoolify`.
 /// File `AppConfig.swift` di-gitignore — jangan commit API key.
+/// API key runtime: Keychain (bisa diganti di Status) → fallback `embeddedApiKey`.
 enum AppConfig {
     static let serverURL = URL(string: "https://lirik.example.com")!
-    static let apiKey = "ganti-dengan-api-key"
+    /// Key bootstrap user default (env API_KEY). Boleh ditimpa lewat Keychain.
+    static let embeddedApiKey = "ganti-dengan-api-key"
+
+    static var apiKey: String {
+        if let stored = KeychainStore.loadApiKey(), !stored.isEmpty { return stored }
+        return embeddedApiKey
+    }
 
     static var hostDisplay: String {
         serverURL.host ?? serverURL.absoluteString

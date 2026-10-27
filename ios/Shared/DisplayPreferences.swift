@@ -1,4 +1,5 @@
 import Foundation
+import WidgetKit
 
 /// Preferensi visual di App Group — dibaca widget tanpa server.
 public struct DisplayPreferences: Equatable, Sendable {
@@ -19,18 +20,29 @@ public struct DisplayPreferences: Equatable, Sendable {
         case putih
     }
 
+    public enum WidgetStyle: String, CaseIterable, Sendable {
+        case cover
+        case lyric
+        case minimal
+    }
+
     public var lockScreenStyle: LockScreenStyle
     public var islandCompact: IslandCompact
     public var showNextLine: Bool
     public var accent: Accent
     public var showProgress: Bool
+    public var widgetStyle: WidgetStyle
+    /// Mulai Live Activity otomatis saat app dibuka (foreground).
+    public var startOnOpen: Bool
 
     public static let `default` = DisplayPreferences(
         lockScreenStyle: .classic,
         islandCompact: .lyric,
         showNextLine: true,
         accent: .hijauSpotify,
-        showProgress: true
+        showProgress: true,
+        widgetStyle: .cover,
+        startOnOpen: true
     )
 
     private enum Key {
@@ -39,6 +51,8 @@ public struct DisplayPreferences: Equatable, Sendable {
         static let showNextLine = "display.showNextLine"
         static let accent = "display.accent"
         static let showProgress = "display.showProgress"
+        static let widgetStyle = "display.widgetStyle"
+        static let startOnOpen = "display.startOnOpen"
     }
 
     public static func load(from defaults: UserDefaults? = AppGroup.defaults) -> DisplayPreferences {
@@ -48,7 +62,9 @@ public struct DisplayPreferences: Equatable, Sendable {
             islandCompact: IslandCompact(rawValue: d.string(forKey: Key.islandCompact) ?? "") ?? .lyric,
             showNextLine: d.object(forKey: Key.showNextLine) as? Bool ?? true,
             accent: Accent(rawValue: d.string(forKey: Key.accent) ?? "") ?? .hijauSpotify,
-            showProgress: d.object(forKey: Key.showProgress) as? Bool ?? true
+            showProgress: d.object(forKey: Key.showProgress) as? Bool ?? true,
+            widgetStyle: WidgetStyle(rawValue: d.string(forKey: Key.widgetStyle) ?? "") ?? .cover,
+            startOnOpen: d.object(forKey: Key.startOnOpen) as? Bool ?? true
         )
     }
 
@@ -59,5 +75,8 @@ public struct DisplayPreferences: Equatable, Sendable {
         d.set(showNextLine, forKey: Key.showNextLine)
         d.set(accent.rawValue, forKey: Key.accent)
         d.set(showProgress, forKey: Key.showProgress)
+        d.set(widgetStyle.rawValue, forKey: Key.widgetStyle)
+        d.set(startOnOpen, forKey: Key.startOnOpen)
+        WidgetCenter.shared.reloadTimelines(ofKind: LyricsHomeWidgetKind.id)
     }
 }

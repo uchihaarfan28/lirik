@@ -5,5 +5,6 @@ import WidgetKit
 struct LirikIslandWidgetBundle: WidgetBundle {
     var body: some Widget {
         LyricsLiveActivity()
+        LyricsHomeWidget()
     }
 }

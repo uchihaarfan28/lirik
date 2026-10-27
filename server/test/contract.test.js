@@ -55,7 +55,19 @@ function properties(body) {
 function makeEngine(lyrics) {
   const clock = new FakeClock();
   const store = new Store(null);
-  store.set({ activity: { token: 'ab'.repeat(32), id: 'A', registeredAtMs: clock.now() } });
+  store.set({
+    devices: [
+      {
+        deviceId: 'c1',
+        activityToken: 'ab'.repeat(32),
+        activityId: 'A',
+        deviceToken: null,
+        pushToStartToken: null,
+        registeredAtMs: clock.now(),
+        lastSeenAt: clock.now(),
+      },
+    ],
+  });
   const track = { id: 't', title: 'Judul', artist: 'Artis', primaryArtist: 'Artis', album: '', durationMs: 60_000 };
   const apns = fakeApns();
   const engine = new LyricsEngine({
@@ -121,7 +133,19 @@ test('Server: content-state di setiap kondisi persis sesuai kontrak', async () =
 test('Server: event start memakai attributes-type & attributes kontrak', async () => {
   const clock = new FakeClock();
   const store = new Store(null);
-  store.set({ pushToStartToken: 'cd'.repeat(32) });
+  store.set({
+    devices: [
+      {
+        deviceId: 'pts',
+        activityToken: null,
+        activityId: null,
+        deviceToken: null,
+        pushToStartToken: 'cd'.repeat(32),
+        registeredAtMs: null,
+        lastSeenAt: clock.now(),
+      },
+    ],
+  });
   const apns = fakeApns();
   const engine = new LyricsEngine({
     spotify: fakeSpotify(clock, { track: { id: 't', title: 'J', artist: 'A', primaryArtist: 'A', album: '', durationMs: 60_000 } }),

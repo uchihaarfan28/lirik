@@ -123,3 +123,15 @@ Format: konteks → keputusan → konsekuensi. Tambahkan ADR baru di bawah, jang
 **Konsekuensi.**
 - (+) Progress selaras sistem tanpa push tiap detik.
 - (−) Seek/pause/resume tetap memicu push (playbackStartSec berubah) — itu disengaja.
+
+## ADR-012 — Multi-user: API key per user + devices[] (bukan multi-tenant publik)
+
+**Status:** Diterima (T-303)
+
+**Konteks.** Satu `state.json` tidak bisa menjalankan dua akun Spotify atau dua iPhone tanpa saling timpa token. Batas Spotify Development Mode = 5 user.
+
+**Keputusan.** Indeks `users.json` (id, name, apiKeyHash) + file `users/<id>.json` (refreshToken, prefs, `devices[]`). Env `API_KEY` = bootstrap. CLI `user:add` mencetak plain key sekali. Auth HTTP = resolve hash key → session (Spotify + Engine). Push update ke semua `activityToken` user. Logout hanya menghapus refresh token. Migrasi otomatis dari `state.json` lama.
+
+**Konsekuensi.**
+- (+) Dua akun / dua device paralel tanpa DB eksternal.
+- (−) User baru butuh restart server setelah `user:add`; bukan self-serve publik (itu T-403).

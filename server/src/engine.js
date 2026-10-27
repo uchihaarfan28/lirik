@@ -124,6 +124,82 @@ export class LyricsEngine {
     return next;
   }
 
+  // ---------- devices (multi-iPhone per user) ----------
+
+  devices() {
+    const list = this.store.get('devices');
+    return Array.isArray(list) ? list : [];
+  }
+
+  saveDevices(devices) {
+    this.store.set({ devices });
+  }
+
+  activityDevices() {
+    return this.devices().filter((d) => d?.activityToken);
+  }
+
+  pushToStartTokens() {
+    return this.devices().map((d) => d?.pushToStartToken).filter(Boolean);
+  }
+
+  deviceTokens() {
+    return this.devices().map((d) => d?.deviceToken).filter(Boolean);
+  }
+
+  upsertDevice(patch) {
+    const devices = [...this.devices()];
+    const deviceId = String(patch.deviceId || '').trim() || null;
+    const token = patch.activityToken || null;
+    let idx = -1;
+    if (deviceId) idx = devices.findIndex((d) => d.deviceId === deviceId);
+    if (idx < 0 && token) idx = devices.findIndex((d) => d.activityToken === token);
+    if (idx < 0 && patch.deviceToken) {
+      idx = devices.findIndex((d) => d.deviceToken === patch.deviceToken);
+    }
+    if (idx < 0 && patch.pushToStartToken) {
+      idx = devices.findIndex((d) => d.pushToStartToken === patch.pushToStartToken);
+    }
+
+    const now = this.now();
+    if (idx < 0) {
+      devices.push({
+        deviceId: deviceId || `dev-${(token || patch.deviceToken || patch.pushToStartToken || 'x').slice(0, 16)}`,
+        activityToken: token,
+        activityId: patch.activityId ?? null,
+        deviceToken: patch.deviceToken ?? null,
+        pushToStartToken: patch.pushToStartToken ?? null,
+        registeredAtMs: patch.registeredAtMs ?? (token ? now : null),
+        lastSeenAt: now,
+      });
+    } else {
+      const cur = devices[idx];
+      devices[idx] = {
+        ...cur,
+        deviceId: deviceId || cur.deviceId,
+        activityToken: token !== undefined && token !== null ? token : cur.activityToken,
+        activityId: patch.activityId !== undefined ? patch.activityId : cur.activityId,
+        deviceToken: patch.deviceToken !== undefined && patch.deviceToken !== null ? patch.deviceToken : cur.deviceToken,
+        pushToStartToken:
+          patch.pushToStartToken !== undefined && patch.pushToStartToken !== null
+            ? patch.pushToStartToken
+            : cur.pushToStartToken,
+        registeredAtMs: token && token !== cur.activityToken ? now : cur.registeredAtMs ?? (token ? now : null),
+        lastSeenAt: now,
+      };
+    }
+    this.saveDevices(devices);
+    return devices;
+  }
+
+  clearActivityOnDevice(predicate) {
+    const devices = this.devices().map((d) => {
+      if (!predicate(d)) return d;
+      return { ...d, activityToken: null, activityId: null, registeredAtMs: null, lastSeenAt: this.now() };
+    });
+    this.saveDevices(devices);
+  }
+
   // ---------- siklus hidup ----------
 
   start() {
@@ -329,7 +405,7 @@ export class LyricsEngine {
     const state = this.buildState();
     const key = JSON.stringify(state);
     if (key === this.lastSentKey) return;
-    if (!this.store.get('activity')?.token) return;
+    if (!this.activityDevices().length) return;
 
     const wait = this.lastPushAt + this.cfg.minPushIntervalMs - this.now();
     if (wait > 0) {
@@ -358,27 +434,35 @@ export class LyricsEngine {
   }
 
   async sendToActivity(event, state, extra = {}) {
-    const activity = this.store.get('activity');
-    if (!activity?.token) return null;
+    const targets = this.activityDevices();
+    if (!targets.length) return null;
+
     const ts = this.nextTimestamp();
     const aps = { timestamp: ts, event, 'content-state': state, ...extra };
     if (event === 'update') aps['stale-date'] = ts + STALE_AFTER_SEC;
 
-    const res = await this.apns.send(activity.token, aps, { priority: 10, label: event });
-    this.recordPush(event, res, state);
-    if (res.ok && this.cfg.logPushes) this.log.info?.(`[push] ${event} ${res.status} ${state.line}`);
-    if (!res.ok) {
-      this.lastSentKey = null; // biar dicoba lagi di resync berikutnya
-      this.log.warn?.(`[engine] APNs ${event} gagal: ${res.status} ${res.reason ?? ''}`);
-      if (isDeadToken(res) && this.store.get('activity')?.token === activity.token) {
-        this.log.warn?.('[engine] token Live Activity sudah tidak berlaku → dihapus. (BadDeviceToken? cek APNS_ENV)');
-        this.store.set({ activity: null });
+    let lastRes = null;
+    let anyOk = false;
+    for (const device of targets) {
+      const res = await this.apns.send(device.activityToken, aps, { priority: 10, label: event });
+      lastRes = res;
+      if (res.ok) {
+        anyOk = true;
+        if (this.cfg.logPushes) this.log.info?.(`[push] ${event} ${res.status} ${state.line}`);
+      } else {
+        this.log.warn?.(`[engine] APNs ${event} gagal: ${res.status} ${res.reason ?? ''}`);
+        if (isDeadToken(res)) {
+          this.log.warn?.('[engine] token Live Activity tidak berlaku → dihapus dari device');
+          this.clearActivityOnDevice((d) => d.activityToken === device.activityToken);
+        }
       }
     }
-    return res;
+    this.recordPush(event, lastRes, state);
+    if (!anyOk) this.lastSentKey = null;
+    return lastRes;
   }
 
-  /** Silent push artwork (best-effort): hanya bila device token + activity + cover berubah. */
+  /** Silent push artwork (best-effort): ke semua deviceToken bila ada activity. */
   async maybeSendArtworkPush() {
     const track = this.track;
     const url = track?.artworkURL;
@@ -387,28 +471,33 @@ export class LyricsEngine {
 
     const key = `${trackId}|${url}`;
     if (key === this.lastArtworkKey) return;
+    if (!this.activityDevices().length) return;
 
-    const deviceToken = this.store.get('deviceToken');
-    const activity = this.store.get('activity');
-    if (!deviceToken || !activity?.token) return;
+    const tokens = this.deviceTokens();
+    if (!tokens.length) return;
 
     this.lastArtworkKey = key;
-    const res = await this.apns.send(
-      deviceToken,
-      { 'content-available': 1 },
-      {
-        priority: 5,
-        label: 'artwork',
-        pushType: 'background',
-        extra: { artwork: { trackId, url } },
-      },
-    );
-    if (!res.ok) {
-      this.log.warn?.(`[engine] silent artwork gagal: ${res.status} ${res.reason ?? ''}`);
-      if (isDeadToken(res)) {
-        this.log.warn?.('[engine] device token tidak berlaku → dihapus');
-        this.store.set({ deviceToken: null });
-        this.lastArtworkKey = null;
+    for (const deviceToken of tokens) {
+      const res = await this.apns.send(
+        deviceToken,
+        { 'content-available': 1 },
+        {
+          priority: 5,
+          label: 'artwork',
+          pushType: 'background',
+          extra: { artwork: { trackId, url } },
+        },
+      );
+      if (!res.ok) {
+        this.log.warn?.(`[engine] silent artwork gagal: ${res.status} ${res.reason ?? ''}`);
+        if (isDeadToken(res)) {
+          this.log.warn?.('[engine] device token tidak berlaku → dihapus');
+          const devices = this.devices().map((d) =>
+            d.deviceToken === deviceToken ? { ...d, deviceToken: null, lastSeenAt: this.now() } : d,
+          );
+          this.saveDevices(devices);
+          this.lastArtworkKey = null;
+        }
       }
     }
   }
@@ -417,15 +506,21 @@ export class LyricsEngine {
   async maintainActivity() {
     const now = this.now();
     const prefs = this.prefs();
-    let activity = this.store.get('activity');
 
-    if (activity?.token && activity.registeredAtMs && now - activity.registeredAtMs > ACTIVITY_MAX_MS) {
-      this.store.set({ activity: null });
-      activity = null;
+    // Hapus activity yang sudah melewati batas 8 jam iOS
+    const stillValid = this.devices().map((d) => {
+      if (d.activityToken && d.registeredAtMs && now - d.registeredAtMs > ACTIVITY_MAX_MS) {
+        return { ...d, activityToken: null, activityId: null, registeredAtMs: null, lastSeenAt: now };
+      }
+      return d;
+    });
+    if (JSON.stringify(stillValid) !== JSON.stringify(this.devices())) {
+      this.saveDevices(stillValid);
     }
 
-    if (prefs.autoStart && this.playing && this.track && !activity?.token) {
-      const pts = this.store.get('pushToStartToken');
+    const hasActivity = this.activityDevices().length > 0;
+    if (prefs.autoStart && this.playing && this.track && !hasActivity) {
+      const pts = this.pushToStartTokens()[0];
       if (pts && now - this.startRequestedAt > this.cfg.startCooldownMs) {
         this.startRequestedAt = now;
         const state = this.buildState();
@@ -442,13 +537,18 @@ export class LyricsEngine {
         };
         const res = await this.apns.send(pts, aps, { priority: 10, label: 'start' });
         this.recordPush('start', res, state);
-        if (!res.ok && isDeadToken(res)) this.store.set({ pushToStartToken: null });
+        if (!res.ok && isDeadToken(res)) {
+          const devices = this.devices().map((d) =>
+            d.pushToStartToken === pts ? { ...d, pushToStartToken: null, lastSeenAt: now } : d,
+          );
+          this.saveDevices(devices);
+        }
       }
     }
 
     const hideAfterMs = effectiveHideAfterMs(prefs);
     if (
-      activity?.token &&
+      this.activityDevices().length &&
       hideAfterMs !== null &&
       !this.playing &&
       this.notPlayingSince !== null &&
@@ -461,16 +561,26 @@ export class LyricsEngine {
   async endActivity() {
     const state = { ...this.buildState(), isPlaying: false };
     await this.sendToActivity('end', state, { 'dismissal-date': Math.floor(this.now() / 1000) });
-    this.store.set({ activity: null });
+    this.clearActivityOnDevice(() => true);
     this.lastSentKey = null;
   }
 
   // ---------- dipanggil dari HTTP API ----------
 
-  registerActivity({ token, activityId }) {
-    const prev = this.store.get('activity');
-    if (prev?.token === token) return;
-    this.store.set({ activity: { token, id: activityId ?? null, registeredAtMs: this.now() } });
+  registerActivity({ token, activityId, deviceId }) {
+    const existing = this.devices().find(
+      (d) => d.activityToken === token || (deviceId && d.deviceId === deviceId),
+    );
+    if (existing?.activityToken === token && (!deviceId || existing.deviceId === deviceId)) {
+      this.upsertDevice({ deviceId, activityToken: token, activityId });
+      return;
+    }
+    this.upsertDevice({
+      deviceId,
+      activityToken: token,
+      activityId: activityId ?? null,
+      registeredAtMs: this.now(),
+    });
     this.lastSentKey = null;
     this.lastPushAt = -Infinity;
     this.lastArtworkKey = null;
@@ -479,28 +589,30 @@ export class LyricsEngine {
     this.kick();
   }
 
-  activityEnded({ activityId }) {
-    const a = this.store.get('activity');
-    if (a && (!activityId || !a.id || a.id === activityId)) {
-      this.store.set({ activity: null });
-      this.lastSentKey = null;
-    }
+  activityEnded({ activityId, deviceId }) {
+    this.clearActivityOnDevice((d) => {
+      if (deviceId && d.deviceId === deviceId) return true;
+      if (activityId && d.activityId && d.activityId === activityId) return true;
+      if (!activityId && !deviceId) return true;
+      return false;
+    });
+    this.lastSentKey = null;
   }
 
-  registerPushToStart(token) {
-    this.store.set({ pushToStartToken: token });
+  registerPushToStart(token, { deviceId } = {}) {
+    this.upsertDevice({ deviceId, pushToStartToken: token });
     this.startRequestedAt = -Infinity;
     this.kick();
   }
 
-  registerDeviceToken(token) {
-    this.store.set({ deviceToken: token });
+  registerDeviceToken(token, { deviceId } = {}) {
+    this.upsertDevice({ deviceId, deviceToken: token });
     this.lastArtworkKey = null;
     this.kick();
   }
 
   async testPush() {
-    if (!this.store.get('activity')?.token) {
+    if (!this.activityDevices().length) {
       return { ok: false, status: 0, reason: 'Belum ada Live Activity yang terdaftar di server' };
     }
     const time = new Date(this.now()).toISOString().slice(11, 19);
@@ -513,10 +625,12 @@ export class LyricsEngine {
   status() {
     const s = this.buildState();
     const prefs = this.prefs();
+    const devices = this.devices();
     return {
       spotifyConnected: this.spotify.isConnected(),
-      pushToStartRegistered: Boolean(this.store.get('pushToStartToken')),
-      activityRegistered: Boolean(this.store.get('activity')?.token),
+      pushToStartRegistered: this.pushToStartTokens().length > 0,
+      activityRegistered: this.activityDevices().length > 0,
+      deviceCount: devices.length,
       nowPlaying: this.track
         ? {
             title: this.track.title,
@@ -539,6 +653,26 @@ export class LyricsEngine {
         autoStart: prefs.autoStart,
         pauseMode: prefs.pauseMode,
       },
+    };
+  }
+
+  /** Semua baris lirik + index aktif — untuk layar penuh di app (bukan Live Activity). */
+  lyricsPayload() {
+    const status = this.lyricState.status;
+    const raw = Array.isArray(this.lyricState.lines) ? this.lyricState.lines : [];
+    const includeLines = status === 'synced' || status === 'plain';
+    const lines = includeLines
+      ? raw.map((l) => ({ t: Number(l.t) || 0, text: String(l.text ?? '') }))
+      : [];
+    const pos = this.positionAt(this.now());
+    const index = status === 'synced' && lines.length ? indexAt(lines, pos) : -1;
+    return {
+      status,
+      trackId: this.track ? String(this.track.id ?? '') : '',
+      title: this.track?.title ?? '',
+      artist: this.track?.artist ?? '',
+      index,
+      lines,
     };
   }
 }

@@ -4,14 +4,24 @@ import SwiftUI
 struct NowPlayingView: View {
     @EnvironmentObject private var manager: ActivityManager
     @State private var busy = false
+    @State private var showFullLyrics = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
                     artworkHero
+                        .onTapGesture { showFullLyrics = true }
                     lyricsBlock
+                        .onTapGesture { showFullLyrics = true }
                     controls
+                    Button {
+                        showFullLyrics = true
+                    } label: {
+                        Label("Layar penuh", systemImage: "arrow.up.left.and.arrow.down.right")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
                     if let msg = manager.message {
                         Text(msg)
                             .font(.footnote)
@@ -25,6 +35,10 @@ struct NowPlayingView: View {
             .navigationTitle("Sekarang")
             .toolbarBackground(.visible, for: .navigationBar)
             .disabled(busy)
+            .fullScreenCover(isPresented: $showFullLyrics) {
+                FullScreenLyricsView()
+                    .environmentObject(manager)
+            }
         }
     }
 

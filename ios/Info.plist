@@ -23,5 +23,16 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.savage.lirikisland</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>lirikisland</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

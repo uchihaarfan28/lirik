@@ -11,6 +11,8 @@
     "start": "node src/server.js",
     "dev": "node --env-file=.env src/server.js",
     "login": "node --env-file=.env src/login-cli.js",
+    "user:add": "node --env-file=.env src/user-cli.js add",
+    "user:list": "node --env-file=.env src/user-cli.js list",
     "simulate": "node src/simulate.js",
     "test": "node --test \"test/*.test.js\""
   }

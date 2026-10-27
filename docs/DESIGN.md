@@ -14,9 +14,9 @@ flowchart LR
         LA[Live Activity<br/>widget extension]
     end
     subgraph Server["Server (Node.js, VPS/Coolify)"]
-        ENG[LyricsEngine]
+        RT[UserRuntime N engine]
         HTTP[HTTP API]
-        ST[(state.json)]
+        ST[(users.json + users/*.json)]
     end
     SPAPI[Spotify Web API]
     LRC[LRCLIB]
@@ -24,14 +24,14 @@ flowchart LR
     CAR[CarPlay Dashboard]
 
     SP -. memutar lagu .-> SPAPI
-    ENG -- polling 3 dtk --> SPAPI
-    ENG -- lirik LRC --> LRC
-    ENG -- push liveactivity --> APNS
+    RT -- polling 3 dtk per user --> SPAPI
+    RT -- lirik LRC --> LRC
+    RT -- push ke semua device user --> APNS
     APNS --> LA
     LA --> CAR
-    APP -- token push, status --> HTTP
-    HTTP --> ENG
-    ENG <--> ST
+    APP -- x-api-key per user --> HTTP
+    HTTP --> RT
+    RT <--> ST
 ```
 
 **Kenapa ada server?** iOS tidak menyediakan API publik untuk membaca lagu dari app lain, dan app kita tidak bisa terus hidup di background tanpa memutar/merekam audio. Server membaca posisi lagu dari Spotify Web API dan "mendorong" tiap baris lewat APNs. App iPhone hanya perlu dibuka untuk setup. Lihat [DECISIONS.md](DECISIONS.md) ADR-001.
@@ -44,16 +44,19 @@ Node.js ≥ 20.6, ES modules, **tanpa dependency runtime**. Semua modul menerima
 
 | Modul | Tanggung jawab |
 |---|---|
-| `src/server.js` | Entry point: baca config, rakit semua modul, jalankan HTTP + engine, shutdown rapi |
+| `src/server.js` | Entry: config, UserRegistry + UserRuntime, HTTP, start semua engine |
 | `src/config.js` | Baca & validasi env (`loadConfig(env)`) |
-| `src/store.js` | State persisten di JSON (tulis atomik tmp→rename, mode 0600) |
-| `src/spotify.js` | OAuth (authorize URL, tukar kode, refresh token), `getCurrentlyPlaying()` |
+| `src/store.js` | State JSON atomik (satu file per user) |
+| `src/users.js` | Indeks multi-user (maks. 5), hash API key, migrasi `state.json` |
+| `src/runtime.js` | Satu Spotify + LyricsEngine per user |
+| `src/spotify.js` | OAuth, refresh token, `getCurrentlyPlaying()`, `logout()` |
 | `src/lyrics.js` | Parser LRC, `indexAt`, `cleanTitle`, `pickBest`, provider LRCLIB + cache |
 | `src/apns.js` | JWT ES256, sesi HTTP/2 ke APNs, `send()`, mode dry-run |
-| `src/engine.js` | **Inti**: polling, estimasi posisi, timer per baris, push update/start/end |
-| `src/app.js` | HTTP API untuk app iPhone + alur login Spotify |
-| `src/login-cli.js` | `npm run login` → minta link login sekali pakai ke server |
-| `src/simulate.js` | `npm run simulate` → demo real-time tanpa Spotify/iPhone |
+| `src/engine.js` | **Inti**: polling, timer baris, push ke `devices[]` |
+| `src/app.js` | HTTP API: auth per API key → session user |
+| `src/user-cli.js` | `npm run user:add` / `user:list` |
+| `src/login-cli.js` | `npm run login` → link login sekali pakai |
+| `src/simulate.js` | `npm run simulate` → demo tanpa Spotify/iPhone |
 
 ### 2.2 App iOS (`ios/LirikIsland/`)
 
@@ -72,6 +75,8 @@ SwiftUI, iOS 18+, Swift 5 language mode.
 |---|---|
 | `LirikIslandWidgetBundle.swift` | `@main` bundle |
 | `LyricsLiveActivity.swift` | `ActivityConfiguration` + semua tampilan (Dynamic Island, Lock Screen `.medium`, CarPlay `.small`) + preview |
+| `LyricsHomeWidget.swift` | WidgetKit Home Screen / CarPlay `.systemSmall` — snapshot App Group, ketuk → layar penuh |
+| `LiveActivityIntents.swift` | App Intents Shortcuts: mulai/hentikan Live Activity + buka lirik penuh |
 
 ### 2.4 Kode bersama (`ios/Shared/`)
 
@@ -284,4 +289,5 @@ flowchart LR
 - Live Activity aktif maks. 8 jam.
 - Push Live Activity prioritas 10 memakai jatah sistem; `NSSupportsLiveActivitiesFrequentUpdates` menambah jatah, tapi pengguna bisa mematikannya.
 - CarPlay memakai family `.small` (iOS 26); tanpa itu jatuh ke tampilan compact Dynamic Island. Live Activity di CarPlay tidak interaktif.
+- Multi-user (T-303): `data/users.json` + `data/users/<id>.json`; `API_KEY` env = user bootstrap; device = entri di `devices[]` (activity + device + push-to-start token).
 - Spotify Development Mode: Premium wajib, maks. 5 user, refresh token 6 bulan.

@@ -1,3 +1,4 @@
+import LyricsShared
 import SwiftUI
 import UIKit
 import UserNotifications
@@ -42,7 +43,10 @@ struct LirikIslandApp: App {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
-                Task { await manager.refreshStatus() }
+                Task {
+                    await manager.refreshStatus()
+                    await manager.ensureStartedOnOpen()
+                }
             }
         }
     }
@@ -51,6 +55,7 @@ struct LirikIslandApp: App {
 struct RootView: View {
     @EnvironmentObject private var manager: ActivityManager
     @State private var showOnboarding = false
+    @State private var showFullLyrics = false
 
     var body: some View {
         ContentView()
@@ -59,12 +64,24 @@ struct RootView: View {
                     showOnboarding = true
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .openFullLyrics)) { _ in
+                showFullLyrics = true
+            }
+            .onOpenURL { url in
+                if AppDeepLink.isLyrics(url) {
+                    showFullLyrics = true
+                }
+            }
             .fullScreenCover(isPresented: $showOnboarding) {
                 OnboardingView {
                     manager.onboardingDone = true
                     showOnboarding = false
                 }
                 .environmentObject(manager)
+            }
+            .fullScreenCover(isPresented: $showFullLyrics) {
+                FullScreenLyricsView()
+                    .environmentObject(manager)
             }
     }
 }

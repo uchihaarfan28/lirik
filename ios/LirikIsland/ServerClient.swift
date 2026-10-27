@@ -1,6 +1,29 @@
 import Foundation
 
 /// Respons GET /api/status dari server.
+/// Respons GET /api/lyrics — daftar baris + index aktif.
+struct LyricsPayload: Decodable, Equatable {
+    struct Line: Decodable, Equatable {
+        let t: Int
+        let text: String
+    }
+
+    let status: String
+    let trackId: String
+    let title: String
+    let artist: String
+    let index: Int
+    let lines: [Line]
+}
+
+/// Respons GET /api/me.
+struct MePayload: Decodable, Equatable {
+    let userId: String
+    let name: String
+    let spotifyConnected: Bool
+    let deviceCount: Int
+}
+
 struct ServerStatus: Decodable {
     struct NowPlaying: Decodable {
         let title: String
@@ -29,6 +52,7 @@ struct ServerStatus: Decodable {
     let spotifyConnected: Bool
     let pushToStartRegistered: Bool
     let activityRegistered: Bool
+    let deviceCount: Int?
     let nowPlaying: NowPlaying?
     let lyrics: String
     let line: String
@@ -58,6 +82,18 @@ struct ServerClient {
 
     func status() async throws -> ServerStatus {
         try await request("GET", "api/status")
+    }
+
+    func lyrics() async throws -> LyricsPayload {
+        try await request("GET", "api/lyrics")
+    }
+
+    func me() async throws -> MePayload {
+        try await request("GET", "api/me")
+    }
+
+    func logout() async throws {
+        try await post("api/logout")
     }
 
     func spotifyLoginLink() async throws -> URL {

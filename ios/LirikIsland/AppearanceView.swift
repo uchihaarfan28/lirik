@@ -58,6 +58,29 @@ struct AppearanceView: View {
                         .onChange(of: manager.displayPrefs.showProgress) { _, _ in manager.saveDisplayPrefs() }
                 }
 
+                Section {
+                    Picker("Gaya", selection: $manager.displayPrefs.widgetStyle) {
+                        Text("Cover").tag(DisplayPreferences.WidgetStyle.cover)
+                        Text("Lirik").tag(DisplayPreferences.WidgetStyle.lyric)
+                        Text("Minimal").tag(DisplayPreferences.WidgetStyle.minimal)
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: manager.displayPrefs.widgetStyle) { _, _ in manager.saveDisplayPrefs() }
+                } header: {
+                    Text("Widget Home Screen / CarPlay")
+                } footer: {
+                    Text("Tambah widget dari layar utama (tahan → Edit Home Screen). Di CarPlay (iOS 26) pilih ukuran kecil. Ketuk widget membuka lirik penuh.")
+                }
+
+                Section {
+                    Toggle("Mulai Live Activity saat app dibuka", isOn: $manager.displayPrefs.startOnOpen)
+                        .onChange(of: manager.displayPrefs.startOnOpen) { _, _ in manager.saveDisplayPrefs() }
+                } header: {
+                    Text("Live Activity")
+                } footer: {
+                    Text("Juga bisa lewat Shortcuts: \"Tampilkan lirik\" / \"Hentikan lirik\" untuk Automation.")
+                }
+
                 Section("Aksen") {
                     Picker("Warna", selection: $manager.displayPrefs.accent) {
                         Text("Hijau Spotify").tag(DisplayPreferences.Accent.hijauSpotify)

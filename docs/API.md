@@ -14,10 +14,10 @@ Sumber kebenaran kontrak Live Activity: [`contract/live-activity.json`](../contr
 Base URL = `PUBLIC_URL`. Semua respons JSON kecuali halaman HTML login. Semua `/api/*` wajib header:
 
 ```
-x-api-key: <API_KEY>
+x-api-key: <API_KEY user>
 ```
 
-Error selalu berbentuk `{ "error": "pesan" }` dengan status 4xx/5xx. `401` = API key salah.
+Setiap user punya API key sendiri (hash di `users.json`). Env `API_KEY` = key user bootstrap (`default`) setelah migrasi. Error selalu `{ "error": "pesan" }`. `401` = API key salah / tidak dikenal.
 
 ### `GET /health`
 Tanpa auth. Untuk healthcheck Docker/Coolify.
@@ -41,7 +41,7 @@ Tukar kode → simpan refresh token → `200` HTML "Spotify terhubung ✓". `sta
 Dikirim app setiap iOS memberi push-to-start token baru.
 ```json
 // request
-{ "token": "80f0…(hex)" }
+{ "token": "80f0…(hex)", "deviceId": "uuid-vendor" }
 // response
 { "ok": true }
 ```
@@ -50,16 +50,16 @@ Dikirim app setiap iOS memberi push-to-start token baru.
 Dikirim app setiap Live Activity mendapat token update (baik dimulai dari app maupun lewat push-to-start).
 ```json
 // request
-{ "token": "a1b2…(hex)", "activityId": "6F2C…" }
+{ "token": "a1b2…(hex)", "activityId": "6F2C…", "deviceId": "uuid-vendor" }
 // response
 { "ok": true }
 ```
-Efek: token disimpan, engine langsung mengirim baris aktif.
+Efek: upsert ke `devices[]` user itu; engine mengirim baris aktif ke **semua** device dengan activity token.
 
 ### `POST /api/activity-ended`
 Dikirim app saat Live Activity `.ended` / `.dismissed`.
 ```json
-{ "activityId": "6F2C…" }
+{ "activityId": "6F2C…", "deviceId": "uuid-vendor" }
 ```
 
 ### `GET /api/status`
@@ -68,6 +68,7 @@ Dikirim app saat Live Activity `.ended` / `.dismissed`.
   "spotifyConnected": true,
   "pushToStartRegistered": true,
   "activityRegistered": true,
+  "deviceCount": 1,
   "nowPlaying": {
     "title": "Judul Lagu",
     "artist": "Artis A, Artis B",
@@ -102,17 +103,48 @@ Dikirim app saat Live Activity `.ended` / `.dismissed`.
 - `lastPush` = `null` sebelum push pertama. `lastError` = string atau `null`.
 - `preferences` — lihat `POST /api/preferences`.
 
-Model Swift: `ServerStatus` di `ios/LirikIsland/ServerClient.swift`. Field non-opsional di Swift wajib selalu ada di respons (dicek tes kontrak).
+Model Swift: `ServerStatus` di `ios/LirikIsland/ServerClient.swift`. Field non-opsional di Swift wajib selalu ada di respons (dicek tes kontrak). `deviceCount` opsional di Swift (decoder toleran).
+
+### `GET /api/me`
+Identitas user yang terautentikasi lewat `x-api-key`.
+```json
+{ "userId": "default", "name": "Default", "spotifyConnected": true, "deviceCount": 2 }
+```
+
+### `POST /api/logout`
+Hapus refresh token Spotify user itu. Device / Live Activity token tetap.
+```json
+{ "ok": true, "spotifyConnected": false }
+```
+
+### `GET /api/lyrics`
+Semua baris lirik lagu aktif + index baris yang sedang dinyanyikan (untuk layar penuh di app; **bukan** payload Live Activity).
+```json
+{
+  "status": "synced",
+  "trackId": "spotifyTrackId",
+  "title": "Judul Lagu",
+  "artist": "Artis A",
+  "index": 3,
+  "lines": [
+    { "t": 0, "text": "Baris pertama" },
+    { "t": 4200, "text": "Baris kedua" }
+  ]
+}
+```
+- `status` sama dengan field `lyrics` di `/api/status`.
+- `lines` kosong kecuali `synced` / `plain`. `index` = `-1` bila tidak ada baris aktif.
+- Model Swift: `LyricsPayload` di `ServerClient.swift`.
 
 ### `POST /api/device-token`
 Token remote notification app (untuk silent push artwork, best-effort).
 ```json
 // request
-{ "token": "a1b2…(hex)" }
+{ "token": "a1b2…(hex)", "deviceId": "uuid-vendor" }
 // response
 { "ok": true }
 ```
-Token mati (410 / BadDeviceToken) hanya menghapus `deviceToken`, bukan token Live Activity.
+Token mati (410 / BadDeviceToken) hanya mengosongkan `deviceToken` di entri device itu, bukan activity token.
 
 ### `POST /api/preferences`
 Merge parsial preferensi siklus hidup (disimpan di `store.prefs`).

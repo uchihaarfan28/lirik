@@ -59,8 +59,17 @@ const apns = {
 
 const store = new Store(null);
 store.set({
-  activity: { token: 'a'.repeat(64), id: 'sim', registeredAtMs: Date.now() },
-  deviceToken: 'b'.repeat(64),
+  devices: [
+    {
+      deviceId: 'sim',
+      activityToken: 'a'.repeat(64),
+      activityId: 'sim',
+      deviceToken: 'b'.repeat(64),
+      pushToStartToken: null,
+      registeredAtMs: Date.now(),
+      lastSeenAt: Date.now(),
+    },
+  ],
 });
 
 const engine = new LyricsEngine({

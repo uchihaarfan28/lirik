@@ -273,18 +273,24 @@ public struct CarPlaySmallView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 4) {
-                Image(systemName: state.isPlaying ? "music.note" : "pause.fill")
-                    .foregroundStyle(Palette.accent)
-                Text(state.title.isEmpty ? LyricsActivityAttributes.appDisplayName : state.title)
-                    .lineLimit(1)
+        HStack(alignment: .center, spacing: 8) {
+            if !state.trackId.isEmpty {
+                ArtworkThumb(trackId: state.trackId, size: 36, cornerRadius: 6)
             }
-            .font(.caption2)
-            .foregroundStyle(Palette.secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 4) {
+                    Image(systemName: state.isPlaying ? "music.note" : "pause.fill")
+                        .foregroundStyle(Palette.accent)
+                    Text(state.title.isEmpty ? LyricsActivityAttributes.appDisplayName : state.title)
+                        .lineLimit(1)
+                }
+                .font(.caption2)
+                .foregroundStyle(Palette.secondary)
 
-            LyricLine(text: state.line, font: .headline, alignment: .leading)
-                .foregroundStyle(Palette.primary)
+                LyricLine(text: state.line, font: .headline, alignment: .leading)
+                    .foregroundStyle(Palette.primary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)

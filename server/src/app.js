@@ -14,12 +14,6 @@ h1{font-size:22px}@media(prefers-color-scheme:dark){body{background:#111;color:#
 <body><h1>${esc(title)}</h1><p>${body}</p></body></html>`;
 }
 
-function safeEqual(a, b) {
-  const ha = crypto.createHash('sha256').update(String(a)).digest();
-  const hb = crypto.createHash('sha256').update(String(b)).digest();
-  return crypto.timingSafeEqual(ha, hb);
-}
-
 function readJson(req, limit = 16 * 1024) {
   return new Promise((resolve, reject) => {
     let size = 0;
@@ -43,21 +37,27 @@ function readJson(req, limit = 16 * 1024) {
   });
 }
 
+function optionalDeviceId(body) {
+  const id = body?.deviceId != null ? String(body.deviceId).trim().slice(0, 128) : '';
+  return id || null;
+}
+
 /**
- * HTTP API untuk app iPhone + alur login Spotify.
- * Semua /api/* butuh header x-api-key.
+ * HTTP API multi-user.
+ * `runtime` = UserRuntime (resolveApiKey / byUserId).
+ * Semua /api/* butuh x-api-key milik salah satu user.
  */
-export function createApp({ cfg, spotify, engine, log = console, now = () => Date.now() }) {
-  const loginNonces = new Map(); // nonce → kedaluwarsa
-  const oauthStates = new Map(); // state → kedaluwarsa
+export function createApp({ cfg, runtime, log = console, now = () => Date.now() }) {
+  const loginNonces = new Map(); // nonce → { exp, userId }
+  const oauthStates = new Map(); // state → { exp, userId }
 
   const take = (map, key) => {
-    const exp = map.get(key);
+    const row = map.get(key);
     map.delete(key);
-    return Boolean(exp && exp > now());
+    return row && row.exp > now() ? row : null;
   };
   const prune = (map) => {
-    for (const [k, exp] of map) if (exp <= now()) map.delete(k);
+    for (const [k, row] of map) if (row.exp <= now()) map.delete(k);
   };
 
   const send = (res, status, body, headers = {}) => {
@@ -79,78 +79,103 @@ export function createApp({ cfg, spotify, engine, log = console, now = () => Dat
   const routes = {
     'GET /health': (req, res) => send(res, 200, { ok: true }),
 
-    'GET /': (req, res) => send(res, 200, page('Lirik Island', 'Server berjalan. Buka app di iPhone untuk menghubungkan Spotify.')),
+    'GET /': (req, res) =>
+      send(res, 200, page('Lirik Island', 'Server berjalan. Buka app di iPhone untuk menghubungkan Spotify.')),
 
-    // ---- alur login Spotify (link sekali pakai, dibuat dari app / CLI) ----
-    'POST /api/login-link': (req, res) => {
+    'POST /api/login-link': (req, res, url, session) => {
       prune(loginNonces);
       const nonce = crypto.randomBytes(18).toString('base64url');
-      loginNonces.set(nonce, now() + LINK_TTL_MS);
+      loginNonces.set(nonce, { exp: now() + LINK_TTL_MS, userId: session.meta.id });
       send(res, 200, { url: `${cfg.publicUrl}/login?n=${nonce}`, expiresInSec: LINK_TTL_MS / 1000 });
     },
 
     'GET /login': (req, res, url) => {
-      if (!take(loginNonces, url.searchParams.get('n') ?? '')) {
+      const row = take(loginNonces, url.searchParams.get('n') ?? '');
+      if (!row) {
         return send(res, 403, page('Link kedaluwarsa', 'Buat link login baru dari app atau <code>npm run login</code>.'));
       }
+      const session = runtime.byUserId(row.userId);
+      if (!session) return send(res, 500, page('User tidak ditemukan', 'Restart server lalu coba lagi.'));
       prune(oauthStates);
       const state = crypto.randomBytes(18).toString('base64url');
-      oauthStates.set(state, now() + LINK_TTL_MS);
-      send(res, 302, '', { Location: spotify.authorizeUrl(state) });
+      oauthStates.set(state, { exp: now() + LINK_TTL_MS, userId: row.userId });
+      send(res, 302, '', { Location: session.spotify.authorizeUrl(state) });
     },
 
     'GET /callback': async (req, res, url) => {
       const err = url.searchParams.get('error');
       if (err) return send(res, 400, page('Login dibatalkan', `Spotify: ${esc(err)}`));
-      if (!take(oauthStates, url.searchParams.get('state') ?? '')) {
-        return send(res, 403, page('Sesi login tidak valid', 'Ulangi dari awal.'));
-      }
+      const row = take(oauthStates, url.searchParams.get('state') ?? '');
+      if (!row) return send(res, 403, page('Sesi login tidak valid', 'Ulangi dari awal.'));
+      const session = runtime.byUserId(row.userId);
+      if (!session) return send(res, 500, page('User tidak ditemukan', 'Restart server lalu coba lagi.'));
       try {
-        await spotify.exchangeCode(url.searchParams.get('code') ?? '');
+        await session.spotify.exchangeCode(url.searchParams.get('code') ?? '');
       } catch (e) {
         log.warn?.(`[auth] tukar kode gagal: ${e.message}`);
         return send(res, 502, page('Gagal terhubung ke Spotify', esc(e.message)));
       }
-      engine.kick();
+      session.engine.kick();
       send(res, 200, page('Spotify terhubung ✓', 'Silakan kembali ke app Lirik Island lalu putar lagu di Spotify.'));
     },
 
-    // ---- dipanggil app iPhone ----
-    'POST /api/push-to-start-token': async (req, res) => {
-      const token = requireToken(await readJson(req));
-      engine.registerPushToStart(token);
-      send(res, 200, { ok: true });
-    },
-
-    'POST /api/activity-token': async (req, res) => {
+    'POST /api/push-to-start-token': async (req, res, url, session) => {
       const body = await readJson(req);
       const token = requireToken(body);
-      engine.registerActivity({ token, activityId: body.activityId ? String(body.activityId).slice(0, 100) : null });
+      session.engine.registerPushToStart(token, { deviceId: optionalDeviceId(body) });
       send(res, 200, { ok: true });
     },
 
-    'POST /api/activity-ended': async (req, res) => {
+    'POST /api/activity-token': async (req, res, url, session) => {
       const body = await readJson(req);
-      engine.activityEnded({ activityId: body.activityId ? String(body.activityId) : null });
+      const token = requireToken(body);
+      session.engine.registerActivity({
+        token,
+        activityId: body.activityId ? String(body.activityId).slice(0, 100) : null,
+        deviceId: optionalDeviceId(body),
+      });
       send(res, 200, { ok: true });
     },
 
-    'GET /api/status': (req, res) => send(res, 200, engine.status()),
-
-    'POST /api/device-token': async (req, res) => {
-      const token = requireToken(await readJson(req));
-      engine.registerDeviceToken(token);
-      send(res, 200, { ok: true });
-    },
-
-    'POST /api/preferences': async (req, res) => {
+    'POST /api/activity-ended': async (req, res, url, session) => {
       const body = await readJson(req);
-      const preferences = engine.setPreferences(body);
+      session.engine.activityEnded({
+        activityId: body.activityId ? String(body.activityId) : null,
+        deviceId: optionalDeviceId(body),
+      });
+      send(res, 200, { ok: true });
+    },
+
+    'GET /api/status': (req, res, url, session) => send(res, 200, session.engine.status()),
+
+    'GET /api/lyrics': (req, res, url, session) => send(res, 200, session.engine.lyricsPayload()),
+
+    'GET /api/me': (req, res, url, session) => {
+      const me = runtime.registry.me(session.meta.id);
+      send(res, 200, me);
+    },
+
+    'POST /api/logout': (req, res, url, session) => {
+      session.spotify.logout();
+      session.engine.kick();
+      send(res, 200, { ok: true, spotifyConnected: false });
+    },
+
+    'POST /api/device-token': async (req, res, url, session) => {
+      const body = await readJson(req);
+      const token = requireToken(body);
+      session.engine.registerDeviceToken(token, { deviceId: optionalDeviceId(body) });
+      send(res, 200, { ok: true });
+    },
+
+    'POST /api/preferences': async (req, res, url, session) => {
+      const body = await readJson(req);
+      const preferences = session.engine.setPreferences(body);
       send(res, 200, { preferences });
     },
 
-    'POST /api/test-push': async (req, res) => {
-      const r = await engine.testPush();
+    'POST /api/test-push': async (req, res, url, session) => {
+      const r = await session.engine.testPush();
       send(res, r?.ok ? 200 : 502, r?.ok ? { ok: true } : { error: `Push gagal: ${r?.status ?? 0} ${r?.reason ?? ''}`.trim() });
     },
   };
@@ -160,11 +185,16 @@ export function createApp({ cfg, spotify, engine, log = console, now = () => Dat
     const handler = routes[`${req.method} ${url.pathname}`];
     if (!handler) return send(res, 404, { error: 'Tidak ditemukan' });
 
-    if (url.pathname.startsWith('/api/') && !safeEqual(req.headers['x-api-key'] ?? '', cfg.apiKey)) {
-      return send(res, 401, { error: 'API key salah' });
+    const needsAuth = url.pathname.startsWith('/api/');
+    let session = null;
+    if (needsAuth) {
+      const key = req.headers['x-api-key'] ?? '';
+      session = runtime.resolveApiKey(key);
+      if (!session) return send(res, 401, { error: 'API key salah' });
     }
+
     try {
-      await handler(req, res, url);
+      await handler(req, res, url, session);
     } catch (e) {
       const status = e.status ?? 500;
       if (status >= 500) log.error?.(`[http] ${req.method} ${url.pathname}: ${e.stack || e.message}`);

@@ -1,12 +1,10 @@
-import path from 'node:path';
 import { createApns } from './apns.js';
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
-import { LyricsEngine } from './engine.js';
 import { log } from './log.js';
 import { createLyricsProvider } from './lyrics.js';
-import { createSpotify } from './spotify.js';
-import { Store } from './store.js';
+import { UserRuntime } from './runtime.js';
+import { UserRegistry } from './users.js';
 
 let cfg;
 try {
@@ -16,30 +14,37 @@ try {
   process.exit(1);
 }
 
-const store = new Store(path.join(cfg.dataDir, 'state.json'));
-const spotify = createSpotify({ ...cfg.spotify, store, log });
+const registry = new UserRegistry({
+  dataDir: cfg.dataDir,
+  bootstrapApiKey: cfg.apiKey,
+  log,
+}).load();
+
 const lyrics = createLyricsProvider({ userAgent: `LirikIsland/0.1 (+${cfg.publicUrl})`, log });
 const apns = createApns({ ...cfg.apns, log });
-const engine = new LyricsEngine({
-  spotify,
+const runtime = new UserRuntime({
+  registry,
   lyrics,
   apns,
-  store,
-  config: { ...cfg.engine, attributesType: cfg.attributesType, appName: cfg.appName },
+  spotifyCfg: cfg.spotify,
+  engineCfg: { ...cfg.engine, attributesType: cfg.attributesType, appName: cfg.appName },
   log,
-});
-const server = createApp({ cfg, spotify, engine, log });
+}).boot();
+
+const server = createApp({ cfg, runtime, log });
 
 server.listen(cfg.port, () => {
   log.info(`Lirik Island server di port ${cfg.port} — ${cfg.publicUrl}`);
   log.info(`APNs: ${cfg.apns.dryRun ? 'DRY RUN (push hanya dicetak ke log)' : `${cfg.apns.env}, topic ${apns.topic}`}`);
-  if (!spotify.isConnected()) log.info('Spotify belum terhubung → jalankan: npm run login');
-  engine.start();
+  log.info(`Users: ${registry.list().map((u) => u.name).join(', ') || '(kosong)'}`);
+  const connected = [...runtime.sessions.values()].filter((s) => s.spotify.isConnected()).length;
+  if (!connected) log.info('Spotify belum terhubung → npm run login (atau Hubungkan dari app)');
+  runtime.startAll();
 });
 
 const shutdown = () => {
   log.info('Berhenti…');
-  engine.stop();
+  runtime.stopAll();
   apns.close();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 3000).unref();

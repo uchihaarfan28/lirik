@@ -76,16 +76,27 @@ Saat jeda: opacity 0.55 + caption lokal "Dijeda".
 
 ```
 ┌──────────────────────────────┐
-│ ♪ Lagu Demo                  │  ← caption2, 60%
-│ Lampu kota berbaris          │  ← headline bold, maks. 2 baris
-│ di kaca depan                │
+│ [cover] ♪ Lagu Demo          │  ← thumb 36 + caption2, 60%
+│         Lampu kota berbaris  │  ← headline bold, maks. 2 baris
+│         di kaca depan        │
 └──────────────────────────────┘
 ```
 - Tanpa baris berikutnya (ruang kecil, kurangi beban baca).
 - Padding 10 pt. Tidak ada tombol (Live Activity di CarPlay non-interaktif).
 - Juga dipakai Apple Watch Smart Stack.
+- **Widget Home Screen** (`.systemSmall`) juga bisa muncul di CarPlay (iOS 26): cover/lirik/minimal, dikonfigurasi di tab Tampilan. Ketuk → buka app layar penuh.
 
-### 3.4 Transisi baris
+### 3.4 Widget Home Screen
+
+| Family | Isi |
+|---|---|
+| Small | Cover + lirik, atau lirik saja, atau minimal (preferensi `widgetStyle`) |
+| Medium | Thumb cover + judul + lirik + next |
+| Large | Cover full-bleed atau thumb + lirik besar |
+
+Data dari App Group snapshot (`NowPlayingSnapshot`), di-refresh saat app/Live Activity update. Bukan real-time per baris — itu peran Live Activity. `widgetURL` → `lirikisland://lyrics`.
+
+### 3.5 Transisi baris
 
 Baris aktif memakai `.id(text)` + `.transition(.push(from: .bottom))` — baris lama naik, baris baru masuk dari bawah. Tidak ada animasi lain.
 
@@ -110,10 +121,17 @@ Baris aktif memakai `.id(text)` + `.transition(.push(from: .bottom))` — baris 
 Tab: **Sekarang** | **Tampilan** | **Status**.
 
 ### Sekarang
-Hero cover (dari App Group) + judul/artis + lirik + CTA "Tampilkan lirik" / "Hentikan Live Activity".
+Hero cover (dari App Group) + judul/artis + lirik + CTA "Tampilkan lirik" / "Hentikan Live Activity" + "Layar penuh".
+Saat app dibuka (foreground) dan preferensi `startOnOpen` aktif → Live Activity dimulai otomatis.
+
+### Layar penuh lirik
+Cover sebagai latar, daftar semua baris (`GET /api/lyrics`), baris aktif disorot + auto-scroll. Dibuka dari widget, Shortcuts, atau tombol di tab Sekarang.
 
 ### Tampilan
-Pratinjau Lock Screen (data contoh buatan) + preferensi visual (App Group) + bagian "Saat jeda" → `POST /api/preferences`.
+Pratinjau Lock Screen + gaya widget Home/CarPlay + toggle mulai Live Activity saat buka app + preferensi visual (App Group) + bagian "Saat jeda" → `POST /api/preferences`.
+
+### Shortcuts / Automation
+App Intents: **Tampilkan lirik**, **Hentikan lirik**, **Buka lirik penuh** — muncul di app Shortcuts untuk Automation (mis. saat CarPlay tersambung).
 
 ### Status
 Host server (bukan API key), Spotify, diagnosa Live Activity, App Group OK/path, tes push.
@@ -123,9 +141,9 @@ Polling: `scenePhase` aktif → 3 s bila playing, 10 s bila idle; batal di backg
 ### Onboarding (3 langkah, sekali)
 1. Hubungkan Spotify → 2. Izinkan Live Activities → 3. Coba push / selesai.
 
-### Rencana Fase 3: lirik penuh di app (FR-15) & offset (FR-14)
-- Daftar semua baris, baris aktif disorot dan auto-scroll ke tengah.
-- Tombol "−0,5 dtk / +0,5 dtk" (disimpan per lagu di server).
+### Lirik penuh di app (FR-15) ✅ dasar
+- Daftar semua baris, baris aktif disorot dan auto-scroll ke tengah (layar penuh).
+- Offset ±0,5 dtk (FR-14) masih Fase 3.
 
 ## 6. Copywriting
 

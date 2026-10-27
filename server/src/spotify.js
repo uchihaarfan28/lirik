@@ -106,6 +106,12 @@ export function createSpotify({
   return {
     isConnected: () => Boolean(store.get('refreshToken')),
 
+    /** Putuskan Spotify (hapus refresh token); device/Live Activity tetap. */
+    logout() {
+      access = null;
+      store.set({ refreshToken: null });
+    },
+
     authorizeUrl(state) {
       const p = new URLSearchParams({
         response_type: 'code',

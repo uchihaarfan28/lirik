@@ -31,10 +31,10 @@ Status: ⬜ belum · 🔄 dikerjakan · ✅ selesai · ⛔ terblokir
 - Ukur: berapa push terkirim vs tampil selama 30 menit; perlu/tidaknya ubah `LEAD_MS`.
 - **Selesai bila:** tile muncul di Dashboard; catatan delay dan jatah push di Log.
 
-### T-104 · API key di Keychain (FR-41) ⬜
-- Helper Keychain kecil (`kSecClassGenericPassword`, service = bundle ID).
-- Migrasi otomatis dari UserDefaults lalu hapus nilai lama.
-- **Selesai bila:** API key tidak ada lagi di UserDefaults; tetap terbaca setelah app di-restart.
+### T-104 · API key di Keychain (FR-41) ✅
+- Helper Keychain (`kSecClassGenericPassword`, service = bundle ID).
+- Runtime: Keychain → fallback `AppConfig.embeddedApiKey`; paste di Status.
+- **Selesai bila:** API key runtime di Keychain; tetap terbaca setelah app di-restart.
 
 ### T-105 · Onboarding (FR-42) ✅
 - Alur 3 langkah: Spotify → Live Activities → coba push (lihat UI-DESIGN §5).
@@ -88,8 +88,9 @@ Status: ⬜ belum · 🔄 dikerjakan · ✅ selesai · ⛔ terblokir
 | ID | Tugas | Kriteria selesai | Status |
 |---|---|---|---|
 | T-301 | Offset per lagu (FR-14): `POST /api/offset {trackId, deltaMs}`, disimpan di state, dipakai di `positionAt` | Tombol ±0,5 dtk di app; tes engine | ⬜ |
-| T-302 | Lirik penuh di app (FR-15): `GET /api/lyrics` → semua baris + index aktif | Auto-scroll, sorot baris aktif | ⬜ |
-| T-303 | Multi-user (maks. 5): state per user (`users/{id}`), API key per user | Dua iPhone dengan akun Spotify berbeda berjalan bersamaan | ⬜ |
+| T-302 | Lirik penuh di app (FR-15): `GET /api/lyrics` → semua baris + index aktif | Auto-scroll, sorot baris aktif | ✅ |
+| T-307 | Widget Home Screen + CarPlay `.systemSmall`, App Intents Shortcuts start/stop, auto-start saat buka app | Widget ketuk → layar penuh; Automation Shortcuts | ✅ |
+| T-303 | Multi-user (maks. 5): state per user (`users/{id}`), API key per user | Dua iPhone dengan akun Spotify berbeda berjalan bersamaan | ✅ |
 | T-304 | Spike broadcast channel Live Activity (iOS 18) sebagai pengganti token per activity | Laporan keandalan vs push-to-start | ⬜ |
 | T-305 | Cache lirik persisten (file) + statistik cakupan lirik | `GET /api/status` menampilkan % lagu bertemu lirik | ⬜ |
 | T-306 | Notifikasi bila refresh token Spotify dicabut | Push biasa / pesan di app | ⬜ |
@@ -109,6 +110,8 @@ Status: ⬜ belum · 🔄 dikerjakan · ✅ selesai · ⛔ terblokir
 
 Tambahkan entri terbaru di atas. Format: `YYYY-MM-DD · T-xxx · ringkasan · hasil/angka penting`.
 
+- 2026-10-27 · T-303/T-104 · Multi-user (users.json + devices[]), CLI user:add, /api/me + logout, Keychain API key, deviceId · 72 tes server lulus
+- 2026-10-27 · T-302/T-307 · Widget Home/CarPlay, Shortcuts start/stop, auto-start on open, layar penuh + `GET /api/lyrics`, snapshot App Group · 65 tes server lulus
 - 2026-10-27 · T-108–T-110 · Rombak UI/UX: kontrak trackId/playbackStartSec/durationMs, artwork App Group, silent push, preferences, TabView, ADR-009/010/011 · 63 tes server lulus
 - 2026-10-27 · Deploy · Dockerfile + `.dockerignore` + `docker-compose.yml` di root monorepo untuk Coolify · Base Directory `/`, volume `/data`
 - 2026-10-27 · Docs · PRD, DESIGN, API, UI-DESIGN, ADR, TESTING, CLAUDE.md, perintah Claude Code, tes kontrak server ↔ Swift, opsi `LOG_PUSHES` · 50 tes lulus

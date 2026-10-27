@@ -15,7 +15,21 @@ const LINES = [
 function setup({ cfg = {}, lyrics = { status: 'synced', lines: LINES }, activity = true, spotifyOpts = {} } = {}) {
   const clock = new FakeClock();
   const store = new Store(null);
-  if (activity) store.set({ activity: { token: 'ab'.repeat(32), id: 'A1', registeredAtMs: clock.now() } });
+  if (activity) {
+    store.set({
+      devices: [
+        {
+          deviceId: 'phone1',
+          activityToken: 'ab'.repeat(32),
+          activityId: 'A1',
+          deviceToken: null,
+          pushToStartToken: null,
+          registeredAtMs: clock.now(),
+          lastSeenAt: clock.now(),
+        },
+      ],
+    });
+  }
   const spotify = fakeSpotify(clock, { track: TRACK, ...spotifyOpts });
   const apns = fakeApns();
   const lyricsProvider = { calls: 0, getLyrics: async () => (lyricsProvider.calls++, lyrics) };
@@ -150,7 +164,19 @@ test('tanpa Live Activity terdaftar tidak ada update; setelah terdaftar langsung
 
 test('push-to-start saat musik mulai, dengan cooldown', async () => {
   const { clock, apns, engine, store } = setup({ activity: false });
-  store.set({ pushToStartToken: 'ef'.repeat(32) });
+  store.set({
+    devices: [
+      {
+        deviceId: 'pts',
+        activityToken: null,
+        activityId: null,
+        deviceToken: null,
+        pushToStartToken: 'ef'.repeat(32),
+        registeredAtMs: null,
+        lastSeenAt: clock.now(),
+      },
+    ],
+  });
   engine.start();
   await clock.advance(100);
   const starts = apns.sent.filter((s) => s.aps.event === 'start');
@@ -177,7 +203,7 @@ test('auto-end setelah lama tidak ada musik', async () => {
   assert.ok(end, 'event end terkirim');
   assert.equal(end.aps['content-state'].isPlaying, false);
   assert.ok(end.aps['dismissal-date']);
-  assert.equal(store.get('activity'), null);
+  assert.equal(engine.activityDevices().length, 0);
   engine.stop();
 });
 
@@ -186,13 +212,13 @@ test('token mati (410) dihapus; error lain dicoba ulang', async () => {
   apns.result = { ok: false, status: 410, reason: 'Unregistered' };
   engine.start();
   await clock.advance(100);
-  assert.equal(store.get('activity'), null);
+  assert.equal(engine.activityDevices().length, 0);
 
   const s2 = setup();
   s2.apns.result = { ok: false, status: 500, reason: 'InternalServerError' };
   s2.engine.start();
   await s2.clock.advance(100);
-  assert.ok(s2.store.get('activity'));
+  assert.ok(s2.engine.activityDevices().length > 0);
   s2.apns.result = { ok: true, status: 200 };
   await s2.clock.advance(3000); // polling berikutnya mengirim ulang
   assert.ok(s2.apns.sent.at(-1).aps['content-state'].line);
@@ -263,6 +289,31 @@ test('testPush dan status', async () => {
   engine.stop();
 });
 
+test('lyricsPayload mengembalikan semua baris + index aktif', async () => {
+  const { clock, engine } = setup({
+    lyrics: {
+      status: 'synced',
+      lines: [
+        { t: 0, text: 'baris awal demo' },
+        { t: 5_000, text: 'baris tengah demo' },
+        { t: 20_000, text: 'baris akhir demo' },
+      ],
+    },
+  });
+  engine.start();
+  await clock.advance(1200);
+  let p = engine.lyricsPayload();
+  assert.equal(p.status, 'synced');
+  assert.equal(p.lines.length, 3);
+  assert.equal(p.index, 0);
+  assert.equal(p.title, 'Judul');
+  await clock.advance(6_000);
+  p = engine.lyricsPayload();
+  assert.equal(p.index, 1);
+  assert.equal(p.lines[1].text, 'baris tengah demo');
+  engine.stop();
+});
+
 test('teks panjang dipotong supaya payload kecil', async () => {
   const long = 'x'.repeat(500);
   const { clock, apns, engine } = setup({ lyrics: { status: 'synced', lines: [{ t: 0, text: long }] } });
@@ -318,7 +369,19 @@ test('content-state punya trackId durationMs playbackStartSec', async () => {
 
 test('autoStart=false tidak mengirim event start', async () => {
   const { clock, apns, engine, store } = setup({ activity: false });
-  store.set({ pushToStartToken: 'ef'.repeat(32) });
+  store.set({
+    devices: [
+      {
+        deviceId: 'pts',
+        activityToken: null,
+        activityId: null,
+        deviceToken: null,
+        pushToStartToken: 'ef'.repeat(32),
+        registeredAtMs: null,
+        lastSeenAt: clock.now(),
+      },
+    ],
+  });
   engine.setPreferences({ autoStart: false });
   engine.start();
   await clock.advance(100);
@@ -339,19 +402,20 @@ test('pauseMode=hide, hideAfterPauseSec=0: grace 20s lalu end', async () => {
   await clock.advance(16_000);
   const end = apns.sent.find((s) => s.aps.event === 'end');
   assert.ok(end, 'end setelah grace 20s');
-  assert.equal(store.get('activity'), null);
+  assert.equal(engine.activityDevices().length, 0);
+  assert.ok(Array.isArray(store.get('devices')));
   engine.stop();
 });
 
 test('pauseMode=dim tidak end meski jeda lama', async () => {
-  const { clock, apns, engine, spotify, store } = setup();
+  const { clock, apns, engine, spotify } = setup();
   engine.setPreferences({ pauseMode: 'dim', hideAfterPauseSec: 60 });
   engine.start();
   await clock.advance(2500);
   spotify.pause();
   await clock.advance(70_000);
   assert.equal(apns.sent.find((s) => s.aps.event === 'end'), undefined);
-  assert.ok(store.get('activity'));
+  assert.ok(engine.activityDevices().length > 0);
   engine.stop();
 });
 
@@ -362,7 +426,7 @@ test('silent push artwork saat device+activity+cover baru', async () => {
   };
   const { clock, apns, engine, store, spotify } = setup();
   spotify.track = track;
-  store.set({ deviceToken: 'dd'.repeat(32) });
+  engine.registerDeviceToken('dd'.repeat(32), { deviceId: 'phone1' });
   engine.start();
   await clock.advance(100);
   const bg = apns.sent.filter((s) => s.opts?.pushType === 'background');
@@ -381,9 +445,9 @@ test('silent push artwork saat device+activity+cover baru', async () => {
 });
 
 test('silent push artwork tidak dikirim tanpa activity', async () => {
-  const { clock, apns, engine, store, spotify } = setup({ activity: false });
+  const { clock, apns, engine, spotify } = setup({ activity: false });
   spotify.track = { ...TRACK, artworkURL: 'https://example.com/c.jpg' };
-  store.set({ deviceToken: 'ee'.repeat(32) });
+  engine.registerDeviceToken('ee'.repeat(32), { deviceId: 'only-dev' });
   engine.start();
   await clock.advance(100);
   assert.equal(apns.sent.filter((s) => s.opts?.pushType === 'background').length, 0);
@@ -393,14 +457,28 @@ test('silent push artwork tidak dikirim tanpa activity', async () => {
 test('device token mati hanya menghapus deviceToken', async () => {
   const { clock, apns, engine, store, spotify } = setup();
   spotify.track = { ...TRACK, artworkURL: 'https://example.com/c.jpg' };
-  store.set({ deviceToken: 'ff'.repeat(32) });
+  engine.registerDeviceToken('ff'.repeat(32), { deviceId: 'phone1' });
   apns.result = (token) =>
     token === 'ff'.repeat(32)
       ? { ok: false, status: 410, reason: 'Unregistered' }
       : { ok: true, status: 200 };
   engine.start();
   await clock.advance(100);
-  assert.equal(store.get('deviceToken'), null);
-  assert.ok(store.get('activity'), 'activity token tetap');
+  const devices = store.get('devices');
+  assert.equal(devices.find((d) => d.deviceId === 'phone1')?.deviceToken, null);
+  assert.ok(devices.find((d) => d.deviceId === 'phone1')?.activityToken, 'activity token tetap');
+  engine.stop();
+});
+
+test('multi-device: update dikirim ke semua activity token', async () => {
+  const { clock, apns, engine } = setup({ activity: false });
+  engine.registerActivity({ token: 'aa'.repeat(32), activityId: 'A', deviceId: 'd1' });
+  engine.registerActivity({ token: 'bb'.repeat(32), activityId: 'B', deviceId: 'd2' });
+  engine.start();
+  await clock.advance(2500);
+  const updates = apns.sent.filter((s) => s.aps.event === 'update');
+  const tokens = new Set(updates.map((s) => s.token));
+  assert.ok(tokens.has('aa'.repeat(32)));
+  assert.ok(tokens.has('bb'.repeat(32)));
   engine.stop();
 });

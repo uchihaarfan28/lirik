@@ -2,6 +2,7 @@ import ActivityKit
 import Foundation
 import LyricsShared
 import UIKit
+import WidgetKit
 
 /// Mengelola Live Activity di iPhone dan mengirim token push-nya ke server.
 @MainActor
@@ -9,15 +10,18 @@ final class ActivityManager: ObservableObject {
     static let shared = ActivityManager()
 
     @Published private(set) var status: ServerStatus?
+    @Published private(set) var me: MePayload?
     @Published private(set) var connectionError: String?
     @Published private(set) var message: String?
     @Published private(set) var activityActive = false
     @Published var displayPrefs: DisplayPreferences
     @Published var serverPrefs: ServerStatus.Preferences
     @Published var appGroupOK: Bool = false
+    @Published var apiKeyDraft: String = ""
 
     private var observing = false
     private var observedIDs = Set<String>()
+    private var contentObservedIDs = Set<String>()
     private var deviceTokenHex: String?
 
     private enum Keys {
@@ -54,7 +58,10 @@ final class ActivityManager: ObservableObject {
 
         Task {
             for await data in Activity<LyricsActivityAttributes>.pushToStartTokenUpdates {
-                await upload("api/push-to-start-token", ["token": data.hexString])
+                await upload("api/push-to-start-token", [
+                    "token": data.hexString,
+                    "deviceId": DeviceIdentity.deviceId,
+                ])
             }
         }
         Task {
@@ -72,22 +79,64 @@ final class ActivityManager: ObservableObject {
         guard !observedIDs.contains(id) else { return }
         observedIDs.insert(id)
         refreshActivityFlag()
+        publishSnapshot(from: activity.content.state)
+
+        if !contentObservedIDs.contains(id) {
+            contentObservedIDs.insert(id)
+            Task {
+                for await content in activity.contentUpdates {
+                    publishSnapshot(from: content.state)
+                }
+            }
+        }
 
         Task {
             for await data in activity.pushTokenUpdates {
-                await upload("api/activity-token", ["token": data.hexString, "activityId": id])
+                await upload("api/activity-token", [
+                    "token": data.hexString,
+                    "activityId": id,
+                    "deviceId": DeviceIdentity.deviceId,
+                ])
             }
         }
         Task {
             for await state in activity.activityStateUpdates {
                 if state == .ended || state == .dismissed {
                     observedIDs.remove(id)
+                    contentObservedIDs.remove(id)
                     refreshActivityFlag()
-                    await upload("api/activity-ended", ["activityId": id])
+                    await upload("api/activity-ended", [
+                        "activityId": id,
+                        "deviceId": DeviceIdentity.deviceId,
+                    ])
                     break
                 }
             }
         }
+    }
+
+    private func publishSnapshot(from state: LyricsActivityAttributes.ContentState) {
+        NowPlayingSnapshot.from(state: state).save()
+    }
+
+    private func publishSnapshot(from status: ServerStatus) {
+        let np = status.nowPlaying
+        var playbackStartSec = 0
+        if let pos = np?.positionMs, let dur = np?.durationMs, dur > 0 {
+            playbackStartSec = max(0, Int(Date().timeIntervalSince1970) - (pos / 1000))
+        }
+        NowPlayingSnapshot(
+            title: np?.title ?? "",
+            artist: np?.artist ?? "",
+            line: status.line,
+            nextLine: status.nextLine,
+            isPlaying: np?.isPlaying ?? false,
+            hasLyrics: status.lyrics == "synced",
+            trackId: np?.trackId ?? "",
+            durationMs: np?.durationMs ?? 0,
+            playbackStartSec: playbackStartSec,
+            updatedAt: Date().timeIntervalSince1970
+        ).save()
     }
 
     private func refreshActivityFlag() {
@@ -101,7 +150,12 @@ final class ActivityManager: ObservableObject {
     func handleDeviceToken(_ data: Data) {
         let hex = data.hexString
         deviceTokenHex = hex
-        Task { await upload("api/device-token", ["token": hex]) }
+        Task {
+            await upload("api/device-token", [
+                "token": hex,
+                "deviceId": DeviceIdentity.deviceId,
+            ])
+        }
     }
 
     func handleRemoteNotification(_ userInfo: [AnyHashable: Any]) async {
@@ -215,10 +269,23 @@ final class ActivityManager: ObservableObject {
                 pushType: .token
             )
             observe(activity)
+            publishSnapshot(from: initial)
             message = "Live Activity berjalan. Kunci layar atau sambungkan CarPlay."
         } catch {
             message = "Gagal memulai Live Activity: \(error.localizedDescription)"
         }
+    }
+
+    /// Dipanggil saat app masuk foreground — mulai Live Activity bila preferensi aktif.
+    func ensureStartedOnOpen() async {
+        guard displayPrefs.startOnOpen else { return }
+        guard activitiesEnabled else { return }
+        refreshActivityFlag()
+        guard !activityActive else { return }
+        if status == nil {
+            await refreshStatus()
+        }
+        await startActivity()
     }
 
     func stopActivity() async {
@@ -227,6 +294,11 @@ final class ActivityManager: ObservableObject {
         }
         refreshActivityFlag()
         message = "Live Activity dihentikan."
+        WidgetCenter.shared.reloadTimelines(ofKind: LyricsHomeWidgetKind.id)
+    }
+
+    func fetchLyrics() async throws -> LyricsPayload {
+        try await client.lyrics()
     }
 
     func spotifyLoginURL() async -> URL? {
@@ -236,6 +308,34 @@ final class ActivityManager: ObservableObject {
             message = "Tidak bisa menghubungi server"
             return nil
         }
+    }
+
+    func logoutSpotify() async {
+        do {
+            try await client.logout()
+            message = "Spotify diputus. Hubungkan lagi bila perlu."
+            await refreshStatus()
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    func saveApiKeyFromDraft() {
+        let trimmed = apiKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 16 else {
+            message = "API key minimal 16 karakter"
+            return
+        }
+        KeychainStore.saveApiKey(trimmed)
+        apiKeyDraft = ""
+        message = "API key disimpan di Keychain."
+        Task { await refreshStatus() }
+    }
+
+    func resetApiKeyToEmbedded() {
+        KeychainStore.clearApiKey()
+        message = "API key dikembalikan ke nilai AppConfig."
+        Task { await refreshStatus() }
     }
 
     func testPush() async {
@@ -252,13 +352,18 @@ final class ActivityManager: ObservableObject {
         appGroupOK = AppGroup.isAvailable
         do {
             status = try await client.status()
+            me = try? await client.me()
             connectionError = nil
             if let p = status?.preferences {
                 serverPrefs = p
             }
+            if let status {
+                publishSnapshot(from: status)
+            }
             await prefetchArtworkFromStatus()
         } catch {
             status = nil
+            me = nil
             connectionError = "Tidak bisa menghubungi server"
         }
     }
